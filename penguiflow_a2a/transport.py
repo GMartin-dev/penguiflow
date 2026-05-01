@@ -221,6 +221,7 @@ def _event_to_task_event(event: Mapping[str, Any], *, agent_url: str) -> RemoteT
             task_id=snapshot.task_id,
             agent_url=agent_url,
             meta=snapshot.meta,
+            raw=event,
         )
     status_update = event.get("statusUpdate")
     if isinstance(status_update, Mapping):
@@ -240,6 +241,7 @@ def _event_to_task_event(event: Mapping[str, Any], *, agent_url: str) -> RemoteT
             task_id=status_update.get("taskId"),
             agent_url=agent_url,
             meta=dict(status_update.get("metadata") or {}),
+            raw=event,
         )
     artifact_update = event.get("artifactUpdate")
     if isinstance(artifact_update, Mapping):
@@ -249,6 +251,7 @@ def _event_to_task_event(event: Mapping[str, Any], *, agent_url: str) -> RemoteT
             kind="artifact",
             text=payload_value if isinstance(payload_value, str) else None,
             result=payload_value,
+            artifact=artifact if isinstance(artifact, Mapping) else None,
             done=bool(artifact_update.get("lastChunk")),
             context_id=artifact_update.get("contextId"),
             task_id=artifact_update.get("taskId"),
@@ -258,6 +261,7 @@ def _event_to_task_event(event: Mapping[str, Any], *, agent_url: str) -> RemoteT
                 "append": artifact_update.get("append"),
                 "last_chunk": artifact_update.get("lastChunk"),
             },
+            raw=event,
         )
     return None
 
@@ -443,6 +447,11 @@ class A2AHttpTransport(RemoteTransport):
                                 context_id=context_id,
                                 task_id=task_id,
                                 agent_url=request.agent_url,
+                                meta={
+                                    **dict(artifact_update.get("metadata") or {}),
+                                    "append": artifact_update.get("append"),
+                                    "last_chunk": artifact_update.get("lastChunk"),
+                                },
                             )
                             if last_chunk:
                                 final_result = "".join(text_chunks)

@@ -121,11 +121,13 @@ class RemoteTaskEvent:
     status: RemoteTaskStatus | None = None
     text: str | None = None
     result: Any | None = None
+    artifact: Any | None = None
     done: bool = False
     context_id: str | None = None
     task_id: str | None = None
     agent_url: str | None = None
     meta: Mapping[str, Any] | None = None
+    raw: Mapping[str, Any] | None = None
 
 
 @dataclass(slots=True)

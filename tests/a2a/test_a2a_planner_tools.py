@@ -13,7 +13,13 @@ from penguiflow import Message as FlowMessage
 from penguiflow import Node, NodePolicy, create
 from penguiflow.artifacts import NoOpArtifactStore, ScopedArtifacts
 from penguiflow.planner import ReactPlanner
-from penguiflow.remote import RemoteTaskAuthRequired, RemoteTaskSnapshot, RemoteTaskState, RemoteTaskStatus
+from penguiflow.remote import (
+    RemoteTaskAuthRequired,
+    RemoteTaskEvent,
+    RemoteTaskSnapshot,
+    RemoteTaskState,
+    RemoteTaskStatus,
+)
 from penguiflow.state import InMemoryStateStore, RemoteBinding
 from penguiflow_a2a import A2AAgentToolset, A2AConfig, A2AService, create_a2a_http_app
 from penguiflow_a2a.models import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
@@ -439,6 +445,112 @@ class _FakeFailedTaskTransport(_FakeCompletedTaskTransport):
         )
 
 
+class _FakeSubscribedTaskTransport:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def send(self, request):  # pragma: no cover
+        del request
+        raise AssertionError("send not expected")
+
+    async def send_task(self, request, *, blocking: bool = False):
+        self.requests.append((request, blocking))
+        return RemoteTaskSnapshot(
+            task_id="task-sub",
+            context_id=request.context_id or "ctx-sub",
+            status=RemoteTaskStatus(state=RemoteTaskState.SUBMITTED, message="queued"),
+            agent_url=request.agent_url,
+        )
+
+    async def get_task(self, *, agent_url: str, task_id: str, history_length: int | None = None):  # pragma: no cover
+        del agent_url, task_id, history_length
+        raise AssertionError("get_task not expected")
+
+    async def cancel(self, *, agent_url: str, task_id: str) -> None:  # pragma: no cover
+        del agent_url, task_id
+
+    async def stream(self, request):  # pragma: no cover
+        del request
+        raise AssertionError("stream not expected")
+
+    async def subscribe_task(self, *, agent_url: str, task_id: str):
+        yield RemoteTaskEvent(
+            kind="status",
+            status=RemoteTaskStatus(
+                state=RemoteTaskState.WORKING,
+                message="Rendering",
+                timestamp="2026-05-01T00:00:00Z",
+            ),
+            context_id="ctx-sub",
+            task_id=task_id,
+            agent_url=agent_url,
+            meta={"step_id": "render", "label": "Rendering creative"},
+        )
+        yield RemoteTaskEvent(
+            kind="artifact",
+            text="halfway",
+            result="halfway",
+            artifact={"parts": [{"text": "halfway"}]},
+            context_id="ctx-sub",
+            task_id=task_id,
+            agent_url=agent_url,
+            meta={"step_id": "render", "status": "running", "last_chunk": False},
+        )
+        yield RemoteTaskEvent(
+            kind="task",
+            task=RemoteTaskSnapshot(
+                task_id=task_id,
+                context_id="ctx-sub",
+                status=RemoteTaskStatus(state=RemoteTaskState.COMPLETED, message="Done"),
+                result={"echo": "done"},
+                agent_url=agent_url,
+                meta={"step_id": "render", "status": "completed"},
+            ),
+            context_id="ctx-sub",
+            task_id=task_id,
+            agent_url=agent_url,
+            done=True,
+        )
+
+
+class _FakePollingTaskTransport:
+    def __init__(self) -> None:
+        self.requests = []
+        self.polls = 0
+
+    async def send(self, request):  # pragma: no cover
+        del request
+        raise AssertionError("send not expected")
+
+    async def send_task(self, request, *, blocking: bool = False):
+        self.requests.append((request, blocking))
+        return RemoteTaskSnapshot(
+            task_id="task-poll",
+            context_id=request.context_id or "ctx-poll",
+            status=RemoteTaskStatus(state=RemoteTaskState.WORKING, message="started"),
+            agent_url=request.agent_url,
+        )
+
+    async def get_task(self, *, agent_url: str, task_id: str, history_length: int | None = None):
+        del history_length
+        self.polls += 1
+        state = RemoteTaskState.COMPLETED if self.polls >= 2 else RemoteTaskState.WORKING
+        return RemoteTaskSnapshot(
+            task_id=task_id,
+            context_id="ctx-poll",
+            status=RemoteTaskStatus(state=state, message=state.value),
+            result={"echo": "polled"} if state is RemoteTaskState.COMPLETED else None,
+            agent_url=agent_url,
+        )
+
+    async def cancel(self, *, agent_url: str, task_id: str) -> None:  # pragma: no cover
+        del agent_url, task_id
+
+    async def stream(self, request):  # pragma: no cover
+        del request
+        raise AssertionError("stream not expected")
+
+
 def httpx_to_a2a_transport(client: httpx.AsyncClient):
     from penguiflow_a2a.transport import A2AHttpTransport
 
@@ -599,6 +711,77 @@ async def test_a2a_agent_toolset_task_mode_raises_failed_snapshot() -> None:
             EchoArgs(text="hi"),
             _FakeCtx(tool_context={"tenant": "t", "session_id": "router-session"}),
         )
+
+
+@pytest.mark.asyncio
+async def test_a2a_agent_toolset_task_mode_emits_remote_task_events() -> None:
+    events: list[RemoteTaskEvent] = []
+
+    async def sink(event: RemoteTaskEvent, _ctx: Any) -> None:
+        events.append(event)
+
+    transport = _FakeSubscribedTaskTransport()
+    toolset = A2AAgentToolset(agent_url="http://test", transport=transport)
+    spec = toolset.tool(
+        name="a2a_echo",
+        skill="echo",
+        args_model=EchoArgs,
+        out_model=EchoResult,
+        desc="Echo via A2A",
+        execution_mode="task",
+    )
+    ctx = _FakeCtx(
+        tool_context={
+            "tenant": "t",
+            "session_id": "router-session",
+            "a2a_remote_event_sink": sink,
+        }
+    )
+
+    result = await spec.node.func(EchoArgs(text="hi"), ctx)
+
+    assert result == {"echo": "done"}
+    assert [event.kind for event in events] == ["task", "status", "artifact", "task"]
+    assert events[0].status is not None
+    assert events[0].status.state is RemoteTaskState.SUBMITTED
+    assert events[1].meta == {"step_id": "render", "label": "Rendering creative"}
+    assert events[2].text == "halfway"
+    assert events[2].artifact == {"parts": [{"text": "halfway"}]}
+    assert ctx._chunks[0]["text"] == "halfway"
+    assert ctx._chunks[0]["meta"]["remote_event_kind"] == "artifact"
+    assert ctx._chunks[0]["meta"]["step_id"] == "render"
+
+
+@pytest.mark.asyncio
+async def test_a2a_agent_toolset_task_mode_polls_when_subscription_is_unavailable() -> None:
+    events: list[RemoteTaskEvent] = []
+    transport = _FakePollingTaskTransport()
+    toolset = A2AAgentToolset(agent_url="http://test", transport=transport)
+    spec = toolset.tool(
+        name="a2a_echo",
+        skill="echo",
+        args_model=EchoArgs,
+        out_model=EchoResult,
+        desc="Echo via A2A",
+        execution_mode="task",
+        poll_interval_s=0,
+        max_poll_attempts=3,
+    )
+    ctx = _FakeCtx(
+        tool_context={
+            "tenant": "t",
+            "session_id": "router-session",
+            "remote_task_event_sink": lambda event, _ctx: events.append(event),
+        }
+    )
+
+    result = await spec.node.func(EchoArgs(text="hi"), ctx)
+
+    assert result == {"echo": "polled"}
+    assert transport.polls == 2
+    assert [event.kind for event in events] == ["task", "status", "status"]
+    assert events[-1].status is not None
+    assert events[-1].status.state is RemoteTaskState.COMPLETED
 
 
 @pytest.mark.asyncio

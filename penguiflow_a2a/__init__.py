@@ -3,7 +3,7 @@
 from .bindings.http import create_a2a_http_app, create_a2a_http_router, install_a2a_http
 from .config import A2AConfig, PayloadMode
 from .core import A2AService
-from .planner_tools import A2AAgentToolset
+from .planner_tools import A2AAgentToolset, RemoteEventSink
 from .registry import (
     A2ARouterToolset,
     AgentRegistry,
@@ -42,6 +42,7 @@ __all__ = [
     "install_a2a_http",
     "A2AHttpTransport",
     "A2AAgentToolset",
+    "RemoteEventSink",
     "A2ARouterToolset",
     "AgentRegistry",
     "AgentRouteCandidate",

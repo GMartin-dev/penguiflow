@@ -127,7 +127,7 @@ async def test_a2a_http_transport_unary() -> None:
 @pytest.mark.asyncio
 async def test_a2a_http_transport_streaming() -> None:
     async def streamer(message, ctx) -> str:
-        await ctx.emit_chunk(parent=message, text="hello", done=True)
+        await ctx.emit_chunk(parent=message, text="hello", done=True, meta={"step_id": "stream"})
         return "hello"
 
     node = Node(streamer, name="streamer", policy=NodePolicy(validate="none"))
@@ -155,6 +155,7 @@ async def test_a2a_http_transport_streaming() -> None:
             chunk = chunk_message.payload
             assert isinstance(chunk, StreamChunk)
             assert chunk.text == "hello"
+            assert chunk.meta["step_id"] == "stream"
             final = await client_flow.fetch()
             assert final == "hello"
         finally:

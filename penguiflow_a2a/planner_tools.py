@@ -25,9 +25,11 @@ from penguiflow.planner.context import ToolContext
 from penguiflow.remote import (
     RemoteCallRequest,
     RemoteTaskAuthRequired,
+    RemoteTaskEvent,
     RemoteTaskInputRequired,
     RemoteTaskSnapshot,
     RemoteTaskState,
+    RemoteTaskStatus,
     RemoteTransport,
 )
 from penguiflow.state import RemoteBinding
@@ -37,6 +39,7 @@ ArgsModelT = TypeVar("ArgsModelT", bound=BaseModel)
 
 PayloadBuilder = Callable[[BaseModel, ToolContext], Any]
 MetadataBuilder = Callable[[BaseModel, ToolContext], Mapping[str, Any] | None]
+RemoteEventSink = Callable[[RemoteTaskEvent, ToolContext], Any]
 ExecutionMode = Literal["auto", "blocking", "stream", "task"]
 _FAILED_REMOTE_STATES = {
     RemoteTaskState.FAILED,
@@ -220,7 +223,7 @@ async def _handle_remote_pause_exception(
 
 
 def _task_transport(transport: RemoteTransport) -> Any | None:
-    required = ("send_task", "get_task", "subscribe_task")
+    required = ("send_task", "get_task")
     if all(callable(getattr(transport, name, None)) for name in required):
         return transport
     return None
@@ -238,6 +241,66 @@ def _raise_for_failed_task(snapshot: RemoteTaskSnapshot) -> None:
         raise RuntimeError(f"Remote task failed: {snapshot.status.message or snapshot.status.state.value}")
 
 
+def _event_from_snapshot(
+    snapshot: RemoteTaskSnapshot,
+    *,
+    kind: str,
+    agent_url: str | None = None,
+    done: bool | None = None,
+) -> RemoteTaskEvent:
+    return RemoteTaskEvent(
+        kind=kind,
+        task=snapshot,
+        status=snapshot.status,
+        result=snapshot.result,
+        done=snapshot.is_terminal if done is None else done,
+        context_id=snapshot.context_id,
+        task_id=snapshot.task_id,
+        agent_url=snapshot.agent_url or agent_url,
+        meta=snapshot.meta,
+    )
+
+
+def _remote_event_signature(event: RemoteTaskEvent) -> tuple[Any, ...]:
+    status: RemoteTaskStatus | None = event.status
+    return (
+        event.kind,
+        event.task_id,
+        event.context_id,
+        status.state.value if status is not None else None,
+        status.message if status is not None else None,
+        status.timestamp if status is not None else None,
+        event.done,
+    )
+
+
+async def _emit_remote_task_event(
+    ctx: ToolContext,
+    configured_sink: RemoteEventSink | None,
+    event: RemoteTaskEvent,
+) -> None:
+    """Best-effort hook for routers to bridge A2A task events into their own UI/event bus."""
+
+    sinks: list[Any] = []
+    if configured_sink is not None:
+        sinks.append(configured_sink)
+    for key in ("a2a_remote_event_sink", "remote_task_event_sink"):
+        runtime_sink = ctx.tool_context.get(key)
+        if runtime_sink is not None and not any(runtime_sink is sink for sink in sinks):
+            sinks.append(runtime_sink)
+
+    for sink in sinks:
+        if not callable(sink):
+            continue
+        try:
+            result = sink(event, ctx)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            # Progress hooks must not change remote execution semantics.
+            continue
+
+
 async def _wait_for_task_completion(
     *,
     transport: Any,
@@ -250,27 +313,32 @@ async def _wait_for_task_completion(
     use_subscription: bool,
     poll_interval_s: float,
     max_poll_attempts: int,
+    remote_event_sink: RemoteEventSink | None,
 ) -> RemoteTaskSnapshot:
     seq = 0
     if use_subscription and callable(getattr(transport, "subscribe_task", None)):
         latest_snapshot: RemoteTaskSnapshot | None = None
         try:
             async for event in transport.subscribe_task(agent_url=agent_url, task_id=task_id):
+                await _emit_remote_task_event(ctx, remote_event_sink, event)
                 latest_snapshot = event.task or latest_snapshot
                 if event.text is not None:
+                    chunk_meta: dict[str, Any] = {
+                        "channel": chunk_channel,
+                        "remote_agent_url": agent_url,
+                        "remote_task_id": event.task_id or task_id,
+                        "remote_context_id": event.context_id,
+                        "remote_skill": skill,
+                        "remote_event_kind": event.kind,
+                    }
+                    if event.meta:
+                        chunk_meta.update(dict(event.meta))
                     await ctx.emit_chunk(
                         stream_id=stream_id,
                         seq=seq,
                         text=event.text,
                         done=event.done,
-                        meta={
-                            "channel": chunk_channel,
-                            "remote_agent_url": agent_url,
-                            "remote_task_id": event.task_id or task_id,
-                            "remote_context_id": event.context_id,
-                            "remote_skill": skill,
-                            "remote_event_kind": event.kind,
-                        },
+                        meta=chunk_meta,
                     )
                     seq += 1
                 if event.task is not None and event.task.is_terminal:
@@ -283,15 +351,25 @@ async def _wait_for_task_completion(
             # Some agents expose task polling but reject subscription when streaming is disabled.
             pass
 
+    last_poll_signature: tuple[Any, ...] | None = None
     for _ in range(max_poll_attempts):
         snapshot = await transport.get_task(agent_url=agent_url, task_id=task_id)
+        event = _event_from_snapshot(snapshot, kind="status", agent_url=agent_url)
+        signature = _remote_event_signature(event)
+        if signature != last_poll_signature:
+            await _emit_remote_task_event(ctx, remote_event_sink, event)
+            last_poll_signature = signature
         if snapshot.is_terminal or snapshot.status.state in {
             RemoteTaskState.INPUT_REQUIRED,
             RemoteTaskState.AUTH_REQUIRED,
         }:
             return snapshot
         await asyncio.sleep(poll_interval_s)
-    return await transport.get_task(agent_url=agent_url, task_id=task_id)
+    snapshot = await transport.get_task(agent_url=agent_url, task_id=task_id)
+    event = _event_from_snapshot(snapshot, kind="status", agent_url=agent_url)
+    if _remote_event_signature(event) != last_poll_signature:
+        await _emit_remote_task_event(ctx, remote_event_sink, event)
+    return snapshot
 
 
 def _merge_metadata(
@@ -365,6 +443,7 @@ class A2AAgentToolset:
         use_subscription: bool = True,
         poll_interval_s: float = 0.25,
         max_poll_attempts: int = 120,
+        remote_event_sink: RemoteEventSink | None = None,
     ) -> NodeSpec:
         """Build a :class:`~penguiflow.catalog.NodeSpec` that calls the remote agent."""
 
@@ -410,6 +489,11 @@ class A2AAgentToolset:
 
             if resolved_execution == "task" and task_transport is not None:
                 snapshot = await task_transport.send_task(request, blocking=False)
+                await _emit_remote_task_event(
+                    ctx,
+                    remote_event_sink,
+                    _event_from_snapshot(snapshot, kind="task", agent_url=self.agent_url),
+                )
                 _raise_for_failed_task(snapshot)
                 await _save_conversation_binding(
                     ctx,
@@ -453,6 +537,7 @@ class A2AAgentToolset:
                         use_subscription=use_subscription,
                         poll_interval_s=poll_interval_s,
                         max_poll_attempts=max_poll_attempts,
+                        remote_event_sink=remote_event_sink,
                     )
                     _raise_for_failed_task(snapshot)
                     await _save_conversation_binding(
@@ -594,4 +679,4 @@ class A2AAgentToolset:
         )
 
 
-__all__ = ["A2AAgentToolset"]
+__all__ = ["A2AAgentToolset", "RemoteEventSink"]

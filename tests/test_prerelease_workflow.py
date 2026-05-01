@@ -16,9 +16,9 @@ def test_prerelease_workflow_publishes_only_alpha_and_rc_tags() -> None:
     assert "pypa/gh-action-pypi-publish@release/v1" in text
 
 
-def test_package_version_is_phase_5_api_freeze_candidate() -> None:
+def test_package_version_is_current_prerelease() -> None:
     pyproject = ROOT / "pyproject.toml"
     init = ROOT / "penguiflow" / "__init__.py"
 
-    assert 'version = "3.7.0a5"' in pyproject.read_text(encoding="utf-8")
-    assert '__version__ = "3.7.0a5"' in init.read_text(encoding="utf-8")
+    assert 'version = "3.7.0a6"' in pyproject.read_text(encoding="utf-8")
+    assert '__version__ = "3.7.0a6"' in init.read_text(encoding="utf-8")
