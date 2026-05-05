@@ -88,6 +88,7 @@ nav:
       - Configuration: planner/configuration.md
       - Tool discovery & filtering: planner/tool-discovery-and-filtering.md
       - Actions & schema: planner/actions-and-schema.md
+      - Auto-Seq: planner/auto-seq.md
       - Tool design: planner/tool-design.md
       - Guardrails: planner/guardrails.md
       - Parallel & joins: planner/parallel-and-joins.md

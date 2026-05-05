@@ -20,6 +20,33 @@ describe('McpApp', () => {
     expect(iframe.getAttribute('srcdoc')).toContain("img-src data: blob:");
   });
 
+  it('injects the bridge after the opening head tag when bundled scripts contain html strings', async () => {
+    const html = [
+      '<!doctype html><html><head>',
+      '<script type="module">',
+      'const template = "</style></head><body>${O}${Rv}";',
+      '</script>',
+      '</head><body><div id="app"></div></body></html>',
+    ].join('');
+
+    render(McpApp, { props: { html } });
+
+    const iframe = await waitFor(() => {
+      const frame = document.querySelector('.mcp-app-frame') as HTMLIFrameElement | null;
+      expect(frame).toBeTruthy();
+      return frame as HTMLIFrameElement;
+    });
+
+    const srcdoc = iframe.getAttribute('srcdoc') ?? '';
+    const bridgeIndex = srcdoc.indexOf('window.mcpRequest');
+    const scriptIndex = srcdoc.indexOf('<script type="module">');
+    const literalHeadCloseIndex = srcdoc.indexOf('</style></head><body>');
+
+    expect(bridgeIndex).toBeGreaterThan(0);
+    expect(scriptIndex).toBeGreaterThan(bridgeIndex);
+    expect(literalHeadCloseIndex).toBeGreaterThan(scriptIndex);
+  });
+
   it('normalizes proxied tool payloads before posting them into the iframe', async () => {
     const proxiedToolData = new Proxy(
       {
