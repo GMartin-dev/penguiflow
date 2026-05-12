@@ -19,28 +19,16 @@ import importlib
 import inspect
 import json
 import sys
-from importlib import metadata
 from dataclasses import fields as dc_fields
 from dataclasses import is_dataclass
 from enum import Enum
+from importlib import metadata
 from types import ModuleType
 from typing import Any
 
 
 def _eprint(message: str) -> None:
     print(message, file=sys.stderr)
-
-
-def _require_py311() -> None:
-    if sys.version_info >= (3, 11):
-        return
-    _eprint(
-        "ERROR: This script requires Python >=3.11 (PenguiFlow requires-python is >=3.11).\n"
-        f"Detected: {sys.version.split()[0]}\n\n"
-        "If you're in the PenguiFlow repo, run:\n"
-        "  uv run python <path-to>/statestore_inspect.py\n"
-    )
-    raise SystemExit(2)
 
 
 def _import_attr(spec: str) -> Any:
@@ -206,8 +194,6 @@ def main() -> int:
         help="Output machine-readable JSON only (suppresses pretty sections).",
     )
     args = parser.parse_args()
-
-    _require_py311()
 
     try:
         import penguiflow.artifacts as artifacts_module  # type: ignore[import-not-found]

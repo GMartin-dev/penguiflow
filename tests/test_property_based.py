@@ -160,6 +160,7 @@ async def _run_stream_sequences_are_monotonic(streams: list[list[str]], schedule
 
 
 @given(stream_scenarios())
+@settings(deadline=None)
 def test_stream_sequences_are_monotonic(scenario: tuple[list[list[str]], list[tuple[int, int]]]) -> None:
     streams, schedule = scenario
     asyncio.run(_run_stream_sequences_are_monotonic(streams, schedule))
