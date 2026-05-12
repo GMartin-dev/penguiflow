@@ -24,12 +24,14 @@ The graph is the tuple of these expressions passed to `create(...)`.
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `validate` | `"both" \| "in" \| "out" \| "none"` | `"none"` | Pydantic validation gating |
+| `validate` | `"both" \| "in" \| "out" \| "none"` | `"both"` | Pydantic validation gating (constructor raises `ValueError` for any other string) |
 | `timeout_s` | `float \| None` | `None` | Hard per-invocation timeout |
-| `max_retries` | `int` | `0` | Retry count after failure (total attempts = max_retries + 1) |
+| `max_retries` | `int` | `0` | Retry count after failure (total attempts = `max_retries + 1`) |
 | `backoff_base` | `float` | `0.5` | Initial backoff seconds |
 | `backoff_mult` | `float` | `2.0` | Exponential multiplier |
-| `max_backoff` | `float` | `30.0` | Backoff ceiling |
+| `max_backoff` | `float \| None` | `None` | Backoff ceiling; `None` means no cap |
+
+`NodePolicy.validate` defaults to `"both"`, which means **the registry must contain entries for every node** unless you opt down to `"in"` / `"out"` / `"none"`. Most starter flows set `validate="none"` on internal nodes to avoid having to register typed models.
 
 ### `validate` semantics
 

@@ -39,7 +39,7 @@ flow = create(
     middlewares=[log_flow_events(logging.getLogger("penguiflow.flow"))],
 )
 ```
-The middleware logs each `FlowEvent` with structured `extra={}` payloads — `trace_id`, `node_name`, queue depths, latency, attempt counts. Add it once per flow.
+The middleware logs `node_start`/`node_success`/`node_error` only (defaults: INFO/INFO/ERROR; configurable via `start_level`/`success_level`/`error_level`). Payload is `event.to_payload()`; `node_error` also injects `error_payload`. All other event types (timeouts, retries, deadline skips, cancellations) pass through silently — wire a sibling middleware to log them.
 
 ### 3) Know your `FlowEvent` catalog
 | `event_type` | When |
@@ -55,7 +55,7 @@ The middleware logs each `FlowEvent` with structured `extra={}` payloads — `tr
 | `trace_cancel_drop` | Runtime dropped queued messages for the trace. |
 | `node_trace_cancelled` | In-flight node was cancelled. |
 
-Each event carries `event_type`, `trace_id` (when present), `node_name`, `node_id`, latency (when applicable), queue depths (`queue_depth_in`/`out`/`total`), `trace_pending`/`trace_inflight`, and `extra` for type-specific fields. Use `event.to_payload()` for logging, `event.metric_samples()` + `event.tag_values()` for metrics.
+Each `FlowEvent` carries: `event_type`, `ts`, `node_name`, `node_id`, `trace_id`, `attempt`, `latency_ms`, `queue_depth_in`, `queue_depth_out`, `outgoing_edges`, `queue_maxsize`, `trace_pending`, `trace_inflight`, `trace_cancelled`, `extra`. `queue_depth_total` is a **computed property**, not a field. Use `event.to_payload()` for logging (it renames `event_type`→`event`, depth keys to `q_depth_*`, and merges `extra` flat), `event.metric_samples()` + `event.tag_values()` for metrics, and `event.error_payload` for structured `FlowError` data on `node_error`.
 
 ### 4) Derive metrics with the right cardinality
 **Critical rule: never tag metrics by `trace_id`.** It's unbounded. Safe tags: `event_type`, `node_name`, `env`, `service`. `tenant` only if bounded. `error_class` only if bounded.

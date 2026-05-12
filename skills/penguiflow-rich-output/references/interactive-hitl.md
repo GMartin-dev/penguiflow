@@ -13,137 +13,76 @@ This reference covers the rich-output side of the contract. The general pause/re
 | Returns `artifact_ref` | Yes | N/A (run pauses before return) |
 | Reads user response | N/A | Yes (via `tool_context` on resume) |
 
-## `ui_form`
+## `ui_form` (`UIFormArgs`)
 
-Render a form, pause for the user to fill it.
+Render a form built from typed `FormField` entries, pause for the user to submit.
 
 ```python
-ui_form(
+from penguiflow.rich_output.tools import FormField, UIFormArgs
+
+ui_form(UIFormArgs(
     title="Send email",
-    schema={                      # JSON Schema for the form
-        "type": "object",
-        "properties": {
-            "recipient": {"type": "string", "format": "email"},
-            "subject": {"type": "string"},
-            "body": {"type": "string", "ui:widget": "textarea"},
-        },
-        "required": ["recipient", "subject"],
-    },
-    submit_label="Send",
-    cancel_label="Cancel",
-    initial_values={"subject": "Re: ..."},
-    input_key="email_form",        # where the answer lands in tool_context
-)
+    description="Compose and confirm",
+    fields=[
+        FormField(name="recipient", type="email", label="To", required=True),
+        FormField(name="subject", type="text", label="Subject", required=True),
+        FormField(name="body", type="textarea", label="Body"),
+    ],
+    submit_label="Send",                # aliases as `submitLabel` over the wire
+    cancel_label="Cancel",              # aliases as `cancelLabel`
+    layout="vertical",                  # vertical | horizontal | inline
+))
 ```
 
-Pause payload (what `PlannerPause.payload` contains):
-```python
-{
-    "ui_kind": "form",
-    "artifact_ref": "art_form_1",
-    "title": "Send email",
-    "schema": {...},
-    "submit_label": "Send",
-    "cancel_label": "Cancel",
-    "initial_values": {...},
-    "input_key": "email_form",
-}
-```
+`FormField.type` is a `Literal[...]` from the actual library: `text`, `number`, `email`, `password`, `url`, `tel`, `textarea`, `select`, `multiselect`, `checkbox`, `radio`, `switch`, `date`, `datetime`, `time`, `file`, `range`, `color`. There is no `schema`/`initial_values`/`input_key` field — the form is defined via fields, defaults via `FormField.default`, and the user's response arrives in `tool_context` keyed by the artifact id or your application's convention.
 
-On resume:
-```python
-result = await planner.resume(
-    pause.resume_token,
-    user_input="submitted",       # or "cancelled"
-    tool_context={
-        **original_ctx,
-        "email_form": {           # keyed by input_key
-            "recipient": "alice@example.com",
-            "subject": "Re: ...",
-            "body": "...",
-        },
-    },
-)
-```
+Pause payload mirrors the args plus the artifact_ref the planner emitted. On resume, pass the submitted form values back through `tool_context` (your app picks the key — there is no library-mandated `input_key`). See [[penguiflow-hitl-pause-resume]] for the resume contract.
 
-The next planner step sees `email_form` in `tool_context` and proceeds.
-
-## `ui_confirm`
+## `ui_confirm` (`UIConfirmArgs`)
 
 Yes/no confirmation gate.
 
 ```python
-ui_confirm(
+from penguiflow.rich_output.tools import UIConfirmArgs
+
+ui_confirm(UIConfirmArgs(
     title="Delete this record?",
     message="This action cannot be undone.",
-    confirm_label="Delete",
-    cancel_label="Keep",
-    danger=True,                  # visual emphasis on confirm
-    input_key="delete_confirmed",
-)
+    confirm_label="Delete",              # aliases as `confirmLabel`
+    cancel_label="Keep",                 # aliases as `cancelLabel`
+    variant="danger",                    # info | warning | danger | success
+    details="Affects 3 child rows.",
+))
 ```
 
-Pause payload:
-```python
-{
-    "ui_kind": "confirm",
-    "artifact_ref": "art_confirm_1",
-    "title": "Delete this record?",
-    "message": "This action cannot be undone.",
-    "confirm_label": "Delete",
-    "cancel_label": "Keep",
-    "danger": True,
-    "input_key": "delete_confirmed",
-}
-```
+`variant` (not `danger: bool`) is the visual emphasis knob — pick `"danger"` for destructive intent. On resume, communicate the decision via `tool_context` (boolean/string of your choice; not a library-mandated `input_key`).
 
-On resume:
-```python
-tool_context={**original_ctx, "delete_confirmed": True}
-# or False for cancel
-```
+## `ui_select_option` (`UISelectOptionArgs`)
 
-## `ui_select_option`
-
-Pick one (or many) from a list.
+Pick one (or many) from a list of `SelectOptionItem`s.
 
 ```python
 ui_select_option(
     title="Select target environment",
     options=[
-        {"value": "prod", "label": "Production"},
-        {"value": "staging", "label": "Staging"},
-        {"value": "dev", "label": "Development"},
+        SelectOptionItem(value="prod", label="Production"),
+        SelectOptionItem(value="staging", label="Staging"),
+        SelectOptionItem(value="dev", label="Development"),
     ],
-    multi_select=False,
-    default=None,
-    input_key="target_env",
-)
+    multiple=False,                       # not `multi_select`
+    min_selections=1,                     # aliases as `minSelections`; default 1
+    max_selections=None,                  # aliases as `maxSelections`
+    layout="list",                        # list | grid | cards
+    searchable=False,
+))
 ```
 
-Pause payload:
-```python
-{
-    "ui_kind": "select",
-    "artifact_ref": "art_select_1",
-    "title": "Select target environment",
-    "options": [...],
-    "multi_select": False,
-    "default": None,
-    "input_key": "target_env",
-}
-```
-
-On resume:
-```python
-tool_context={**original_ctx, "target_env": "staging"}
-# or ["staging", "dev"] for multi_select
-```
+`SelectOptionItem` supports `value`, `label`, optional `description`, `icon`, `disabled`, and `metadata`. The args expose `multiple` (boolean) and selection counts — not `multi_select`/`default`/`input_key`. The user's selection comes back through `tool_context` (your app's choice of key) along with `UIInteractionResult.ok`.
 
 ## Wiring requirements
 
 1. `pause_enabled=True` on the planner (default).
-2. `RichOutputConfig.enabled=True` and the interactive tools in the allowlist (they're separate from the regular components).
+2. `RichOutputConfig(enabled=True, allowlist=[..., "form", "confirm", "select_option", ...])` — the interactive components are part of the allowlist set, not a separate switch.
 3. The frontend renders the components AND knows how to call `planner.resume(...)` (typically via your host API).
 4. For durable resume across workers: `StateStore` implementing `SupportsPlannerState` — see [[penguiflow-hitl-pause-resume]].
 
@@ -160,16 +99,16 @@ Use `ctx.pause(...)` directly for ad-hoc / non-standard pauses. Use the interact
 ## Anti-patterns
 
 - **Embedding side effects before the pause.** The tool body returns when `ctx.pause` raises, but anything **before** the pause already happened. Don't write to a DB and then ask for confirmation — split into a plan tool and a commit tool.
-- **Skipping `input_key`.** Without a stable key, your resume `tool_context` collides with other inputs.
+- **Picking a shared response key by accident.** When you decide where the user's submission lands in `tool_context`, pick a unique key per artifact (e.g., the artifact_ref) — colliding keys overwrite earlier responses.
 - **Long-running prompts.** Pauses can sit waiting for hours. Set TTL on the StateStore record.
-- **Reusing the same `input_key` for different forms.** Confuses downstream reads. Namespace per session/turn.
+- **Using a `danger` boolean.** The library uses `variant: Literal["info","warning","danger","success"]` instead — `variant="danger"` is the destructive emphasis.
 
 ## Operational defaults
 
-- Default `confirm_label`/`cancel_label` should describe the actual action ("Delete" not "OK").
-- `danger=True` only for destructive confirmations.
-- Form schemas: small, validated server-side (the planner enforces JSON Schema before pause).
-- Multi-select forms: keep options short; for long lists, switch to a search/typeahead in your frontend (which still uses a single `ui_select_option` underneath).
+- `confirm_label`/`cancel_label` should describe the actual action ("Delete" not "OK").
+- Use `variant="danger"` only for destructive confirmations.
+- Keep `FormField` lists short and use typed `FormFieldType`s — the planner validates the schema before pause.
+- Multi-select with many options: turn on `searchable=True` and keep `layout="list"` (or switch to `"cards"`/`"grid"` for visual selection).
 
 ## Cross-channel rules
 

@@ -58,8 +58,10 @@ The extraction pipeline uses `ctx._artifacts` (raw `ArtifactStore`). Tool develo
 
 ### `TransportType.MCP`
 `connection` can be:
-- A launch command (`npx -y @modelcontextprotocol/server-github`) — spawns the server as a subprocess.
-- A URL (`stdio://...`, `http://...`) — connects to a running MCP service.
+- A launch command (`npx -y @modelcontextprotocol/server-github`) — FastMCP spawns the server (stdio).
+- A URL (HTTP/SSE) — connects to a running MCP service; auto-detects transport unless `mcp_transport_mode` overrides.
+
+`mcp_transport_mode` (`UtcpMode`-style `McpTransportMode` enum): `AUTO` (default), `SSE`, or `STREAMABLE_HTTP`. Set explicitly only when auto-detection fails — modern servers should use `STREAMABLE_HTTP`.
 
 Production recommendation: run MCP servers as managed services (Docker/k8s) and connect via URL. Avoid `npx -y ...` in long-lived workers — process lifecycle, version drift, and node_modules churn cause flakiness.
 
@@ -71,6 +73,24 @@ Production recommendation: run MCP servers as managed services (Docker/k8s) and 
 
 ### `TransportType.CLI`
 `connection` is a CLI pattern. Use for command-line tools that follow UTCP's CLI conventions.
+
+### `utcp_mode` (HTTP / UTCP only)
+
+`utcp_mode: UtcpMode` controls how the connection string is interpreted for HTTP/UTCP transports:
+- `AUTO` (default) — try manual_url first, fallback to base_url.
+- `MANUAL_URL` — connection is a UTCP manual endpoint (recommended for clean discovery).
+- `BASE_URL` — connection is a plain REST base URL (limited discovery).
+
+**Hard rule**: setting `utcp_mode` to anything other than `AUTO` while `transport=TransportType.MCP` raises `ValueError("utcp_mode is only valid for HTTP/UTCP transports")` at config validation.
+
+### `auth_config` validation
+
+The `validate_config` model-validator enforces:
+- `auth_type=BEARER` → `auth_config["token"]` must be present.
+- `auth_type=API_KEY` → `auth_config["api_key"]` must be present.
+- `auth_type=COOKIE` → both `auth_config["cookie_name"]` and `auth_config["cookie_value"]` must be present.
+
+Missing required keys raise `ValueError` at construction time, not at first call.
 
 ## Namespacing
 

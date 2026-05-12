@@ -2,21 +2,31 @@
 
 ## Building an `A2AService`
 
+The constructor takes `flow` positionally and **all other arguments keyword-only**:
+
 ```python
 from penguiflow_a2a import A2AConfig, A2AService, PayloadMode
 
 service = A2AService(
-    flow,                          # PenguiFlow runtime
-    agent_card=agent_card,         # A2AAgentCard or AgentCard
+    flow,                                  # PenguiFlow runtime (positional)
+    agent_card=card,                       # penguiflow_a2a.models.AgentCard
     config=A2AConfig(
         supported_versions=("0.3",),
-        default_version=None,       # defaults to first supported version
+        default_version=None,              # defaults to first supported version
         allow_v1_aliases=True,
         allow_tenant_prefix=True,
         default_tenant="default",
-        payload_mode=PayloadMode.AUTO,    # AUTO | ENVELOPE
-        agent_url=None,             # optional canonical URL for the card
+        payload_mode=PayloadMode.AUTO,      # AUTO | ENVELOPE
+        agent_url=None,                     # optional canonical URL for the card
     ),
+    # Optional:
+    # store=InMemoryTaskStore(),            # custom TaskStore
+    # target=...,                            # specific ingress node(s)
+    # registry=...,                          # ModelRegistry for validated nodes
+    # default_headers={...},
+    # push_sender=HttpPushNotificationSender(),
+    # extended_agent_card=fuller_card,
+    # extended_agent_card_auth=lambda headers: <bool>,
 )
 ```
 
@@ -37,30 +47,43 @@ The service:
 
 ## Agent card schema
 
-`A2AAgentCard`:
+`A2AService` requires the full A2A-spec `AgentCard` from `penguiflow_a2a.models` (alongside `AgentCapabilities`, `AgentInterface`, `AgentSkill`):
+
 ```python
-A2AAgentCard(
+from penguiflow_a2a.models import (
+    AgentCapabilities, AgentCard, AgentInterface, AgentSkill,
+)
+
+card = AgentCard(
+    protocol_versions=["0.3"],
     name="My Agent",
     description="What I do",
     version="1.0.0",
-    schema_version="1.0",
-    tags=["nlp", "search"],
-    capabilities=["message/send", "message/stream"],
+    supported_interfaces=[AgentInterface(url="https://agent.example.com", protocol_binding="HTTP")],
+    capabilities=AgentCapabilities(
+        streaming=True,
+        push_notifications=True,
+        extended_agent_card=False,
+        state_transition_history=False,
+    ),
+    default_input_modes=["application/json"],
+    default_output_modes=["application/json"],
     skills=[
-        A2ASkill(
-            name="answer",
+        AgentSkill(
+            id="answer",
+            name="Answer",
             description="Answer a question",
-            mode="both",         # send | stream | both
-            inputs={...},        # JSON Schema fragments
-            outputs={...},
+            tags=["qa"],
         ),
     ],
-    contact_url="https://example.com/contact",
-    documentation_url="https://example.com/docs",
 )
 ```
 
-The card is published at `GET /.well-known/agent-card.json` with media type `application/a2a+json`. An optional `GET /extendedAgentCard` returns a fuller card behind an authorization check (uses `service.is_extended_agent_card_authorized(headers)`).
+Required fields (`Field(min_length=1)` in the model): `protocol_versions`, `supported_interfaces`, `default_input_modes`, `default_output_modes`, `skills`. `AgentSkill.tags` must also be non-empty. `to_camel` alias generation means JSON fields appear as `protocolVersions`, `defaultInputModes`, etc.
+
+(The lightweight `A2AAgentCard` / `A2ASkill` types in `penguiflow_a2a.server` are a legacy surface used by the older `A2AServerAdapter`. For modern HTTP/gRPC bindings via `A2AService`, use the `AgentCard` shown above.)
+
+The card is published at `GET /.well-known/agent-card.json` with media type `application/a2a+json`. An optional `GET /extendedAgentCard` returns a fuller card behind an authorization check the host app supplies via `extended_agent_card_auth=Callable[[Mapping[str,str]], bool]`.
 
 ## Three binding modes
 
@@ -131,11 +154,13 @@ When `allow_tenant_prefix=True` and `allow_v1_aliases=True`, every operation rou
 | GET | `/.well-known/agent-card.json` | Public agent card (always at app level) |
 | GET | `/extendedAgentCard` | Authorized fuller card |
 | POST | `/rpc` | JSON-RPC 2.0 endpoint (all operations) |
-| POST | `/message/send` | Single-shot REST send |
-| POST | `/message/stream` | SSE stream send |
-| POST | `/tasks/cancel` | Cancel a task |
+| POST | `/message:send` | Single-shot REST send (note colon) |
+| POST | `/message:stream` | SSE stream send |
+| GET / POST | `/tasks/{task_id}:subscribe` | Re-subscribe to a streaming task |
+| POST | `/tasks/{task_id}:cancel` | Cancel a task |
 | GET | `/tasks/{task_id}` | Get task snapshot |
 | GET | `/tasks` | List tasks (paginated) |
+| POST / GET / DELETE | `/tasks/{task_id}/pushNotificationConfigs[...]` | Manage push-notification configs per task |
 
 The JSON-RPC endpoint enforces:
 - `jsonrpc == "2.0"` (else `-32600`).

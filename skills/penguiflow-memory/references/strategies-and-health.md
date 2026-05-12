@@ -53,10 +53,11 @@ What the LLM sees (degraded):
 
 ## `MemoryHealth` lifecycle
 
-States:
-- `healthy` — Summarizer works; rolling summary is fresh.
-- `degraded` — Summarizer has failed recent attempts; memory is operating in truncation fallback.
-- `recovering` — Summarizer is being retried after degradation.
+States (the `MemoryHealth` enum):
+- `HEALTHY` (`"healthy"`) — Summarizer works; rolling summary is fresh.
+- `RETRY` (`"retry"`) — Last summarizer call failed; another retry is pending under `retry_attempts`/`retry_backoff_base_s`.
+- `DEGRADED` (`"degraded"`) — Retry budget exhausted; memory falls back to truncation behavior while a slower recovery loop continues (`degraded_retry_interval_s`).
+- `RECOVERING` (`"recovering"`) — A retry succeeded after degradation; transient state before returning to `HEALTHY`.
 
 Transitions emit `on_health_changed(old, new)`. Wire this to your metrics sink to alert on summarizer reliability.
 

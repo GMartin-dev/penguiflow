@@ -2,20 +2,28 @@
 
 The canonical component set ships with PenguiFlow. Your frontend may add custom components — register them in `RichOutputConfig.allowlist` and your renderer.
 
-## Canonical component allowlist
+## Canonical component allowlist (`DEFAULT_ALLOWLIST`)
 
-| Component | Typed wrapper | Use for |
+The library default allowlist covers: `markdown`, `json`, `echarts`, `mermaid`, `plotly`, `datagrid`, `metric`, `report`, `grid`, `tabs`, `accordion`, `code`, `latex`, `callout`, `image`, `video`, `form`, `confirm`, `select_option`. Replace `RichOutputConfig.allowlist` to subset (recommended) or extend with your own components.
+
+Only a subset has typed wrapper tools (the rest are reached via generic `render_component`):
+
+| Component | Typed render | Typed build (non-emitting) |
 |---|---|---|
-| `markdown` | `render_markdown(text, ...)` | Plain markdown blocks |
-| `echarts` | `render_chart_echarts(option, ...)` | Charts (line, bar, pie, scatter, heatmap) — uses Apache ECharts schema |
-| `datagrid` | `render_table(columns, rows, ...)` | Result tables, data grids |
-| `report` | `render_report(title, sections, ...)` | Document-style multi-section output |
-| `grid` | `render_grid(cells, ...)` | Dashboard-style layout |
-| `tabs` | `render_tabs(tabs, ...)` | Multiple related views in one component |
-| `accordion` | `render_accordion(sections, ...)` | Collapsible sections |
+| `echarts` | `render_chart_echarts(option, ...)` | `build_chart_echarts(option, ...)` |
+| `datagrid` | `render_table(columns, rows, ...)` | `build_table(columns, rows, ...)` |
+| `report` | `render_report(title, sections, ...)` | — (use generic `render_component` for build) |
+| `grid` | `render_grid(items, ...)` | `build_grid(items, ...)` |
+| `tabs` | `render_tabs(items, ...)` | `build_tabs(items, ...)` |
+| `accordion` | `render_accordion(items, ...)` | `build_accordion(items, ...)` |
+| any other (`markdown`, `json`, `mermaid`, `plotly`, `metric`, `code`, `latex`, `callout`, `image`, `video`) | use `render_component(component="...", props=...)` | n/a |
 
-Plus interactive HITL tools (covered in `interactive-hitl.md`):
-- `ui_form`, `ui_confirm`, `ui_select_option`
+The complete typed tool names are constants in `penguiflow.rich_output.tools`: `RICH_OUTPUT_RENDER_TOOL_NAMES` and `RICH_OUTPUT_BUILD_TOOL_NAMES`. There is no `render_markdown` or `build_markdown` wrapper — markdown uses the generic renderer.
+
+Plus the interactive HITL tools (covered in `interactive-hitl.md`):
+- `ui_form` (emits `form` component), `ui_confirm` (emits `confirm`), `ui_select_option` (emits `select_option`).
+
+And introspection tools: `describe_component(name)` and `list_artifacts(...)`.
 
 ## `render_component` (generic)
 
@@ -111,18 +119,18 @@ render_accordion(
 )
 ```
 
-### `render_markdown`
+### Markdown rendering
+No typed wrapper exists. Use the generic renderer with the `markdown` component:
 ```python
-render_markdown(text: str, metadata: dict | None = None)
+render_component(component="markdown", props={"text": "Hello **world**"})
 ```
-The simplest renderer. Frontend renders as standard markdown.
 
 ## When to use which
 
-- **Single chart/table/report**: typed wrapper.
+- **Single chart/table/report**: typed wrapper (`render_chart_echarts`, `render_table`, `render_report`).
 - **Composed dashboard**: `render_grid` or `render_tabs` referencing pre-built children (use `build_*`, see `builders-and-artifact-refs.md`).
-- **Custom component**: `render_component` with your frontend's registered name.
-- **Plain text response**: `render_markdown` or just return text (no rich output needed).
+- **Markdown/code/callout/json/mermaid/plotly/metric/image/video/latex**: generic `render_component(component="...", props={...})`.
+- **Plain text response**: skip rich output entirely and return text from your planner.
 
 ## Component validation
 

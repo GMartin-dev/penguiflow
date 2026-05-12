@@ -4,40 +4,27 @@ The `SkillProvider` protocol lets host apps supply skills at runtime, bypassing 
 
 ## `SkillProvider` protocol
 
-Implement (signatures):
+The actual protocol (`penguiflow.skills.provider.SkillProvider`) is wider than a basic list/get/search trio. All methods accept typed query objects from `penguiflow.skills.models` plus a keyword-only `tool_context` (`Mapping[str, object]`) and optional `capability_context: SkillCapabilityContext | None`:
 
 ```python
+from collections.abc import Mapping, Sequence
+from penguiflow.skills.models import (
+    RetrievalResponse, SkillCapabilityContext, SkillDirectoryEntry,
+    SkillListRequest, SkillListResponse, SkillQuery, SkillResultDetailed,
+    SkillSearchQuery, SkillSearchResponse, SkillsDirectoryConfig,
+)
 from penguiflow.skills.provider import SkillProvider
 
 class MyProvider(SkillProvider):
-    async def list(
-        self,
-        *,
-        tenant_id: str | None = None,
-        project_id: str | None = None,
-        user_id: str | None = None,
-        **kwargs,
-    ) -> Sequence[Skill]: ...
-
-    async def get(
-        self,
-        names: Sequence[str],
-        *,
-        tenant_id: str | None = None,
-        **kwargs,
-    ) -> Sequence[Skill]: ...
-
-    async def search(
-        self,
-        query: str,
-        *,
-        tenant_id: str | None = None,
-        limit: int = 6,
-        **kwargs,
-    ) -> Sequence[Skill]: ...
+    async def get_relevant(self, query: SkillQuery, *, tool_context, capability_context=None) -> RetrievalResponse: ...
+    async def search(self, query: SkillSearchQuery, *, tool_context, capability_context=None) -> SkillSearchResponse: ...
+    async def get_by_name(self, names: list[str], *, tool_context, capability_context=None) -> list[SkillResultDetailed]: ...
+    async def list(self, req: SkillListRequest, *, tool_context, capability_context=None) -> SkillListResponse: ...
+    async def directory(self, config: SkillsDirectoryConfig, *, tool_context, capability_context=None) -> Sequence[SkillDirectoryEntry]: ...
+    async def format_for_injection(self, skills: Sequence[SkillResultDetailed], *, max_tokens: int) -> tuple[str, int, int, bool]: ...
 ```
 
-The protocol is duck-typed. Implement on any object.
+`tool_context` is the scoping vehicle — read `tenant_id`/`project_id`/`user_id` from it. `capability_context` (built by `build_skill_capability_context(...)`) is what the provider should apply for applicability filtering when present.
 
 ## Wiring
 
@@ -53,11 +40,11 @@ planner = ReactPlanner(
 )
 ```
 
-Or with a factory (one provider per planner instance):
+Or with a factory — `SkillProviderFactory = Callable[[SkillsConfig], SkillProvider]`:
 
 ```python
-def factory(planner) -> SkillProvider:
-    return MyProvider(planner=planner)
+def factory(config: SkillsConfig) -> SkillProvider:
+    return MyProvider(config=config)
 
 planner = ReactPlanner(
     ...,
@@ -66,16 +53,14 @@ planner = ReactPlanner(
 )
 ```
 
-Use the factory when:
-- The provider needs a reference to the planner (introspection).
-- You're forking planner instances and need per-fork provider state.
+The factory receives the live `SkillsConfig`. Use it when the provider needs to look at the planner's configuration (cache_dir, top_k, packs) at construction time.
 
 ## Composition rules
 
 When both static packs and a runtime provider are configured:
 
-1. The provider is called first (`list`/`search`/`get`).
-2. The static pack is called next.
+1. The runtime provider is called first.
+2. The local SQLite store (loaded from `skill_packs`) is called next.
 3. Results are merged.
 4. **Runtime provider wins on `name` collision.** Local packs are fallback.
 
@@ -95,46 +80,41 @@ The provider methods receive `tenant_id`, `project_id`, `user_id` from `tool_con
 - Per-tenant overrides ("tenant A uses a custom version of the email skill").
 
 ### Pattern: tenant override
+Read scoping fields from `tool_context` inside each method. Return the typed response models from `penguiflow.skills.models` — empty responses are fail-closed in multi-tenant deployments.
+
 ```python
 class TenantProvider(SkillProvider):
-    def __init__(self, db):
-        self.db = db
+    def __init__(self, db): self.db = db
 
-    async def list(self, *, tenant_id=None, **kw):
-        if tenant_id is None:
-            return []     # fail-closed in multi-tenant
-        rows = await self.db.fetch(
-            "SELECT * FROM skills WHERE tenant_id = $1", tenant_id
-        )
-        return [Skill.from_row(r) for r in rows]
-
-    async def search(self, query, *, tenant_id=None, limit=6, **kw):
-        if tenant_id is None:
-            return []
+    async def search(self, query, *, tool_context, capability_context=None):
+        tenant_id = tool_context.get("tenant_id")
+        if not tenant_id:
+            return SkillSearchResponse(results=[])         # fail-closed
         rows = await self.db.fetch(
             "SELECT * FROM skills WHERE tenant_id = $1 AND search_index @@ to_tsquery($2) LIMIT $3",
-            tenant_id, query, limit,
+            tenant_id, query.query, query.limit,
         )
-        return [Skill.from_row(r) for r in rows]
+        return SkillSearchResponse(results=[SkillSearchResult.from_row(r) for r in rows])
 
-    async def get(self, names, *, tenant_id=None, **kw):
-        if tenant_id is None or not names:
+    async def get_by_name(self, names, *, tool_context, capability_context=None):
+        tenant_id = tool_context.get("tenant_id")
+        if not tenant_id or not names:
             return []
         rows = await self.db.fetch(
             "SELECT * FROM skills WHERE tenant_id = $1 AND name = ANY($2)",
             tenant_id, list(names),
         )
-        return [Skill.from_row(r) for r in rows]
+        return [SkillResultDetailed.from_row(r) for r in rows]
 ```
 
-Fail-closed (return `[]` when `tenant_id` is missing) is the multi-tenant default.
+Return empty responses (rather than raising) when `tenant_id` is missing — this is the multi-tenant fail-closed contract.
 
 ### Pattern: user personalization
 ```python
 class UserPersonaProvider(SkillProvider):
-    async def list(self, *, user_id=None, **kw):
-        prefs = await load_user_preferences(user_id)
-        return build_skills_from_prefs(prefs)
+    async def list(self, req, *, tool_context, capability_context=None):
+        prefs = await load_user_preferences(tool_context.get("user_id"))
+        return SkillListResponse(entries=build_entries_from_prefs(prefs))
 ```
 
 ## Host-side ACL patterns
@@ -144,8 +124,8 @@ Skills can encode operational power — a "rollback prod" skill in the wrong han
 Layer authz at the provider:
 
 ```python
-async def get(self, names, *, user_id=None, **kw):
-    user = await load_user(user_id)
+async def get_by_name(self, names, *, tool_context, capability_context=None):
+    user = await load_user(tool_context.get("user_id"))
     skills = await self.repo.get_skills(names)
     return [s for s in skills if user.can_access(s)]
 ```

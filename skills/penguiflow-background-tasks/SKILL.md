@@ -30,18 +30,18 @@ from penguiflow.planner.models import BackgroundTasksConfig
 planner = ReactPlanner(
     ...,
     background_tasks=BackgroundTasksConfig(
-        enabled=True,
-        include_prompt_guidance=True,        # add planner hints about tasks.*
-        allow_tool_background=False,         # start False; flip when ready
-        default_mode="subagent",             # subagent | job
-        default_merge_strategy="HUMAN_GATED",
-        max_concurrent_tasks=4,
-        max_tasks_per_session=20,
-        task_timeout_s=300.0,
-        proactive_report_enabled=False,      # auto-merge mode
-        default_group_merge_strategy="HUMAN_GATED",
-        default_group_report=True,
-        max_tasks_per_group=10,
+        enabled=True,                        # default False; must opt in
+        include_prompt_guidance=True,        # default
+        allow_tool_background=False,         # default
+        default_mode="subagent",             # default — "subagent" | "job"
+        default_merge_strategy="HUMAN_GATED",# default
+        max_concurrent_tasks=5,              # default
+        max_tasks_per_session=50,            # default
+        task_timeout_s=3600,                 # default; INT seconds
+        proactive_report_enabled=False,      # default
+        default_group_merge_strategy="APPEND",  # library default; flip to HUMAN_GATED for safety
+        default_group_report=True,           # default
+        max_tasks_per_group=10,              # default
     ),
 )
 ```

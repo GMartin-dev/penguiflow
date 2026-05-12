@@ -24,11 +24,15 @@ from penguiflow import FlowError, FlowErrorCode
 - `original_exc: BaseException | None`
 - attempt / latency metadata
 
-`FlowErrorCode` includes (non-exhaustive):
+`FlowErrorCode` (the complete enum at runtime):
 - `NODE_EXCEPTION` — node body raised.
 - `NODE_TIMEOUT` — `timeout_s` exceeded.
+- `TRACE_CANCELLED` — `flow.cancel(trace_id)` aborted in-flight work.
+- `DEADLINE_EXCEEDED` — `Message.deadline_s` passed before the node ran.
+- `HOP_BUDGET_EXHAUSTED` — controller-style budget consumed.
+- `TOKEN_BUDGET_EXHAUSTED` — token budget consumed.
 
-Other codes exist for cancellation, validation, etc. — inspect a returned `FlowError` to see its code at runtime.
+`FlowError.code` is the **string value** (e.g. `"NODE_EXCEPTION"`); comparing with `FlowErrorCode.NODE_EXCEPTION` works because the enum is `str, Enum`.
 
 ## Surfacing errors to callers
 

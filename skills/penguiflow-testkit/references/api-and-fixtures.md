@@ -11,26 +11,26 @@ from penguiflow.testkit import (
 )
 ```
 
-## `run_one(flow, message, registry=None, timeout_s=1.0)`
+## `run_one(flow, message, *, registry=None, timeout_s=1.0)`
 
-End-to-end single-trace runner.
+End-to-end single-trace runner. `registry` and `timeout_s` are **keyword-only**.
 
 ### Parameters
 - `flow: PenguiFlow` — built via `create(...)`.
-- `message: Message` — **must** be a `Message` envelope. Payload-only raises `TypeError`.
-- `registry: ModelRegistry | None` — pass when any node uses `NodePolicy.validate != "none"`.
-- `timeout_s: float` — wall-clock cap on the test (default 1.0s).
+- `message: Message` — **must** be a `penguiflow.types.Message`. Anything else raises `TypeError`.
+- `registry: ModelRegistry | None` — pass when any node uses `NodePolicy.validate != "none"` (the default).
+- `timeout_s: float | None` — wall-clock cap on the test (default `1.0`); `None` disables the timeout.
 
 ### Returns
 The first `fetch()` result. Payload type depends on what the egress node returns.
 
 ### Lifecycle
-1. `flow.run(registry=registry)`.
-2. Subscribe to `FlowEvent`s for this `message.trace_id` into the recorder.
-3. `await flow.emit(message, trace_id=message.trace_id)`.
-4. `result = await asyncio.wait_for(flow.fetch(trace_id=message.trace_id), timeout=timeout_s)`.
-5. `await flow.stop()`.
-6. Persist event log keyed by `trace_id` for subsequent assertions.
+1. Mark `message.trace_id` as a tracked trace in the global recorder state.
+2. `flow.run(registry=registry)`.
+3. `await flow.emit(message)` (plain emit, **not** trace-scoped).
+4. `result = await asyncio.wait_for(flow.fetch(), timeout_s)` when `timeout_s` is not None, else `await flow.fetch()`.
+5. `await flow.stop()` in a `finally`.
+6. Event capture for the trace is performed by the recorder middleware attached at flow build time (set up automatically on the first call).
 
 ### Raises
 - `TypeError` if `message` isn't a `Message`.
@@ -54,37 +54,58 @@ Compares the deduped sequence of `node_start` events to `expected_names`.
 - For parallel fan-out, the inter-branch order is non-deterministic. Assert smaller invariants per branch.
 - For trace cancel scenarios, expect a shorter sequence than the happy path.
 
-## `simulate_error(node_name, code, fail_times=1, return_message=None)`
+## `simulate_error(node_name, code, *, fail_times=1, result=None, result_factory=None, exception_type=RuntimeError)`
 
-Builds an async callable for use inside `Node(...)`.
+Builds an async callable for use inside `Node(...)`. `fail_times`, `result`, `result_factory`, and `exception_type` are **keyword-only**.
 
 ### Parameters
-- `node_name: str` — used in the simulated exception's `node_name` attribute.
-- `code: str` — used in the exception's `code` attribute.
-- `fail_times: int` — how many invocations raise before succeeding.
-- `return_message: Any | None` — what to return on success (default: echo the inbound message).
+- `node_name: str` — embedded in the simulated exception message for diagnostics.
+- `code: FlowErrorCode | str` — embedded in the exception text (a `FlowErrorCode` is stringified to its value).
+- `fail_times: int = 1` — first N invocations raise; must be `>= 1`.
+- `result: Any | None = None` — value returned on success after the failures are exhausted (default: echo the inbound message).
+- `result_factory: Callable[[Any], Awaitable[Any] | Any] | None = None` — async or sync function called with the inbound message to compute the success return. Mutually exclusive with `result`.
+- `exception_type: type[Exception] = RuntimeError` — class raised on each simulated failure.
 
-### Returns
-An `async def fn(msg, ctx)` you wrap with `Node(simulate_error(...), name=node_name, ...)`.
+### Returned exception shape
+The wrapper raises `exception_type(f"[{code}] simulated failure in {node_name} (attempt {n})")`. The runtime wraps it in `FlowError(code=NODE_EXCEPTION, ...)` if retries exhaust — `code` becomes part of the message, not the runtime error code.
 
 ### Common patterns
 
 **Two failures then success (test `max_retries=2`):**
 ```python
-node = Node(simulate_error("flaky", "SIM", fail_times=2), name="flaky",
-            policy=NodePolicy(max_retries=2))
+node = Node(
+    simulate_error("flaky", "SIM", fail_times=2),
+    name="flaky",
+    policy=NodePolicy(max_retries=2, backoff_base=0.01),
+)
 ```
 
 **Always fail (test terminal failure):**
 ```python
-node = Node(simulate_error("perm", "DOWN", fail_times=999), name="perm",
-            policy=NodePolicy(max_retries=2))   # 3 attempts total, all fail
+node = Node(
+    simulate_error("perm", "DOWN", fail_times=999),
+    name="perm",
+    policy=NodePolicy(max_retries=2),   # 3 attempts total, all fail
+)
 ```
 
 **Custom success return:**
 ```python
-node = Node(simulate_error("ok", "ONCE", fail_times=1, return_message={"recovered": True}),
-            name="ok", policy=NodePolicy(max_retries=1))
+node = Node(
+    simulate_error("ok", "ONCE", fail_times=1, result={"recovered": True}),
+    name="ok",
+    policy=NodePolicy(max_retries=1),
+)
+```
+
+**Custom exception type:**
+```python
+class MyError(Exception): ...
+node = Node(
+    simulate_error("typed", "X", fail_times=1, exception_type=MyError),
+    name="typed",
+    policy=NodePolicy(max_retries=1),
+)
 ```
 
 ## `get_recorded_events(trace_id) -> tuple[FlowEvent, ...]`
@@ -116,17 +137,20 @@ assert success.latency_ms < 100
 - Global recorder — tests should use distinct `trace_id`s to avoid cross-test bleed.
 - Snapshot only — call after `run_one` completes.
 
-## `assert_preserves_message_envelope(node, message=None, ctx=None)`
+## `assert_preserves_message_envelope(node, *, message=None, ctx=None) -> Message`
 
-Asserts a node returns a `Message` with intact `headers` and `trace_id`.
+Asserts a node returns a `Message` with intact `headers` and `trace_id`. **Async**. `message` and `ctx` are keyword-only.
 
 ### Parameters
-- `node: Node | Callable` — the node or its raw async fn.
+- `node: Node | Callable[[Message, Any], Awaitable[Any]]` — the `Node` or its raw async fn.
 - `message: Message | None` — input message (default: a synthetic one).
-- `ctx: Any | None` — synthetic context (default: a minimal stub).
+- `ctx: Any | None` — context object (default: an internal stub whose `emit`/`emit_nowait` no-op).
+
+### Returns
+The `Message` the node produced. Returned for follow-up assertions in the caller.
 
 ### Behavior
-1. Invokes `node(message, ctx)`.
+1. `await node(message, ctx)` (or `await node.invoke(...)` if you pass a `Node`).
 2. Asserts the return is a `Message`.
 3. Asserts `result.headers == message.headers`.
 4. Asserts `result.trace_id == message.trace_id`.

@@ -61,40 +61,47 @@ Don't use when:
 
 For calling a remote service as if it were a local node.
 
-Interface:
+`RemoteTransport` protocol (`penguiflow.remote.RemoteTransport`):
 ```python
 class RemoteTransport(Protocol):
     async def send(self, request: RemoteCallRequest) -> RemoteCallResult: ...
-    def stream(self, request: RemoteCallRequest) -> AsyncIterator[RemoteStreamEvent]: ...
-    async def cancel(self, agent_url: str, task_id: str) -> None: ...
+    def stream(self, request: RemoteCallRequest) -> AsyncIterator[RemoteStreamEvent]: ...   # not async; returns iterator directly
+    async def cancel(self, *, agent_url: str, task_id: str) -> None: ...                    # keyword-only
 ```
 
-Construct a remote node:
+Optional richer surface: `SupportsRemoteTasks` (in the same module) adds `send_task`, `get_task`, `list_tasks`, `subscribe_task`, and four `*_task_push_notification_config*` methods. `A2AHttpTransport` implements both.
+
+Construct a remote node via the `RemoteNode(...)` factory (all keyword-only):
 ```python
-from penguiflow import RemoteNode
+from penguiflow import NodePolicy, RemoteNode
+
 remote = RemoteNode(
     transport=my_transport,
-    agent_url="https://specialist.example.com",
     skill="answer",
-    record_binding=True,             # persist RemoteBinding for cancellation across restarts
+    agent_url="https://specialist.example.com",
+    name="ask_specialist",            # required — becomes Node.name
+    agent_card=card_dict,             # optional but recommended
+    policy=NodePolicy(timeout_s=30.0, max_retries=1),
+    streaming=False,
+    record_binding=True,              # default; persists RemoteBinding
 )
 ```
 
 Include `remote` in your graph like any `Node`. The runtime calls the transport on edge dequeue.
 
-### `record_binding=True`
+### `record_binding=True` (default)
 Persists `RemoteBinding(trace_id, agent_url, task_id, ...)` to the `StateStore`. Required for:
 - Cancellation across worker restarts.
 - A2A conversation continuity.
 - Distributed observability of remote tasks.
 
-If you don't set this (or `StateStore.save_remote_binding` isn't implemented), remote tasks can leak — you can spawn them but not cancel them after a restart.
+If you set `record_binding=False` (or `StateStore.save_remote_binding` isn't implemented), remote tasks can leak — you can spawn them but not cancel them after a restart.
 
 ### Cancellation
-`flow.cancel(trace_id)` calls `transport.cancel(agent_url, task_id)` for every recorded binding. Best-effort — the remote may or may not honor it.
+`flow.cancel(trace_id)` calls `transport.cancel(agent_url=..., task_id=...)` (keyword-only) for every recorded binding. Best-effort — the remote may or may not honor it.
 
 ### Implementations
-- `A2AHttpTransport` (in `penguiflow_a2a`) implements this protocol for HTTP A2A endpoints.
+- `A2AHttpTransport` (in `penguiflow_a2a`) implements both protocols for HTTP A2A endpoints.
 - For gRPC, custom HTTP, internal services — implement the protocol yourself.
 
 ## A2A handoff

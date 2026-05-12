@@ -25,49 +25,41 @@ Guardrails are the **policy enforcement layer**. They don't replace tool visibil
 ## Workflow
 
 ### 1) Wire a gateway
-Guardrails are off by default. Enable by passing a `guardrail_gateway`:
+Guardrails are off until you pass a `guardrail_gateway`. The gateway holds a `RuleRegistry` and an async-rule inbox:
 ```python
-from penguiflow.planner import ReactPlanner
-from penguiflow.planner.guardrails import GuardrailGateway, GatewayConfig
+from penguiflow.planner.guardrails import GatewayConfig, GuardrailGateway, RuleRegistry
+from penguiflow.steering.guard_inbox import SteeringGuardInbox
+
+registry = RuleRegistry()
+registry.register_sync(ToolAllowlistRule(...))
+registry.register_async(MyDeepRule(...))
 
 gateway = GuardrailGateway(
-    config=GatewayConfig(
-        mode="shadow",                  # shadow | enforce
-        sync_timeout_ms=15,
-        sync_parallel=True,
-        sync_fail_open=False,           # safety > availability
-        async_fail_open=True,           # availability for deep rules
-    ),
-    rules=[...],                        # see step 3
+    registry=registry, guard_inbox=SteeringGuardInbox(),
+    config=GatewayConfig(),     # defaults: mode="enforce", sync_fail_open=False, etc.
 )
-
-planner = ReactPlanner(
-    ...,
-    guardrail_gateway=gateway,
-    guardrail_conversation_history_turns=3,   # optional context
-)
+planner = ReactPlanner(..., guardrail_gateway=gateway, guardrail_conversation_history_turns=1)
 ```
+Library defaults: `mode="enforce"`, `sync_timeout_ms=15.0`, `sync_parallel=True`, `async_enabled=True`, `sync_fail_open=False`, `async_fail_open=True`. Switch `mode="shadow"` during rollout.
 
-### 2) Start in `shadow`, then move to `enforce`
-- `mode="shadow"` — evaluate and log decisions; do not block.
-- `mode="enforce"` — apply STOP/PAUSE/RETRY/REDACT.
+### 2) Roll out via `shadow` then `enforce`
+- `mode="shadow"` — evaluate and log; never block.
+- `mode="enforce"` (default) — apply STOP/PAUSE/RETRY/REDACT.
 
-Shadow mode is the standard rollout path. Measure rule hit rates and false positives, fix the rules, then enforce.
+Common rollout path: ship in shadow, measure rule hit rates and false positives, then revert to enforce per rule.
 
-### 3) Define rules — FAST or DEEP
-Each rule classifies as:
-- **FAST** — synchronous, runs on the request path. Bounded by `sync_timeout_ms` (default 15ms). Use for regex/allowlist checks and deterministic logic.
-- **DEEP** — asynchronous, runs via a `SteeringGuardInbox`. No latency budget on the request path. Use for LLM-as-judge, network checks, slow external services.
-
-Always-cheap rules: tool allowlists, regex secret patterns, structural validation. Push everything else to DEEP.
+### 3) Classify rules — `RuleCost.FAST` or `RuleCost.DEEP`
+Every rule sets a `cost` attribute:
+- **`RuleCost.FAST`** — synchronous, runs on the request path bounded by `sync_timeout_ms` (15ms default). Register via `registry.register_sync(rule)`. Use for regex/allowlist checks and deterministic logic.
+- **`RuleCost.DEEP`** — async via `SteeringGuardInbox`. Register via `registry.register_async(rule)`. Use for LLM-as-judge, network checks, slow external services.
 
 ### 4) Pick decision actions
-Rules return `GuardrailDecision`:
+Rules return `GuardrailDecision(action=GuardrailAction.X, rule_id=..., reason=..., severity=..., ...)`. Actions:
 - `ALLOW` — pass through.
-- `REDACT` — apply `redactions: tuple[RedactionSpec, ...]` to text content.
-- `RETRY` — re-run the LLM call with `corrective_message` (`RetrySpec`).
-- `PAUSE` — pause planner with `reason="approval_required"` (`PauseSpec` carries scope, approver roles, prompt, timeout).
-- `STOP` — terminate with `StopSpec(error_code, user_message, internal_reason)`.
+- `REDACT` — apply `redactions: tuple[RedactionSpec, ...]` (path-based redaction into the event payload).
+- `RETRY` — re-run the LLM call with `RetrySpec(max_attempts=2, corrective_message=...)`.
+- `PAUSE` — pause planner with `reason="approval_required"`; `PauseSpec(scope=Literal["run","step","tool_call"], approver_roles, prompt, timeout_s=300.0)`.
+- `STOP` — terminate with `StopSpec(error_code="GUARDRAIL_STOP", user_message=..., internal_reason=...)`. All fields default; override what you need.
 
 `STOP` is the fail-closed default for high-risk findings. `REDACT` for secrets. `PAUSE` for "human must approve". `RETRY` for fixable LLM mistakes.
 
@@ -92,7 +84,7 @@ For internal-only or low-risk agents, `True` everywhere is fine. For external-fa
 Each `GuardrailEvent` exposes `text_content`, `tool_name`, `tool_args`, and `payload` (tool_call_id, action_seq, conversation history). Use what you need.
 
 ### 7) Wire the reliability observation clamp
-Separately from policy guardrails: `ReactPlanner(..., observation_guardrail=ObservationGuardrailConfig(...))` (default enabled). On huge JSON tool outputs, stores as artifact (if `ArtifactStore` available) else truncates (JSON-preserving). Prevents context overflow. Leave enabled. See `references/observation-clamp.md`.
+Separately from policy guardrails: `ReactPlanner(..., observation_guardrail=ObservationGuardrailConfig(...))`. No `enabled` flag — the config object is the active state. Knobs (with defaults): `max_observation_chars=50_000`, `max_field_chars=10_000`, `truncation_suffix`, `preserve_structure=True`, `auto_artifact_threshold=20_000` (set `0` to disable artifact path), `preview_length=500`. On huge outputs: stores as artifact (when `auto_artifact_threshold>0` and `ArtifactStore` available) else structure-preserving truncation. Pass `observation_guardrail=None` to disable entirely. See `references/observation-clamp.md`.
 
 ### 8) Audit and tune
 Every decision carries a stable `rule_id`. Log in shadow mode for 1-2 weeks: measure hit rates, surface timeouts (promote to DEEP), drop never-fire rules. Promote to `enforce` per rule.

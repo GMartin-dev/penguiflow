@@ -22,28 +22,35 @@ Call once at process startup. Re-calling resets handlers.
 
 ## `FlowEvent`
 
+Actual frozen dataclass (`penguiflow.metrics.FlowEvent`):
+
 ```python
 FlowEvent(
-    event_type: str,             # see catalog below
-    trace_id: str | None,
-    node_id: str | None,
+    event_type: str,                # see catalog below
+    ts: float,
     node_name: str | None,
-    queue_depth_in: int | None,
-    queue_depth_out: int | None,
-    queue_depth_total: int | None,
-    trace_pending: int | None,
-    trace_inflight: int | None,
-    queue_maxsize: int | None,
+    node_id: str | None,
+    trace_id: str | None,
+    attempt: int,
     latency_ms: float | None,
-    attempt: int | None,
-    extra: dict,
+    queue_depth_in: int,
+    queue_depth_out: int,
+    outgoing_edges: int,            # number of successor edges for this node
+    queue_maxsize: int,             # `queue_maxsize` applied to this edge
+    trace_pending: int | None,
+    trace_inflight: int,
+    trace_cancelled: bool,
+    extra: Mapping[str, Any] = MappingProxyType({}),
 )
 ```
 
+`queue_depth_total` is a **computed property** (`queue_depth_in + queue_depth_out`), not a field. Constructor expects all fields except `extra` (which defaults).
+
 Methods:
-- `event.to_payload() -> dict` — JSON-friendly serialization for logging.
-- `event.metric_samples() -> dict[str, float]` — numeric samples for metrics.
-- `event.tag_values() -> dict[str, str]` — bounded-cardinality tags.
+- `event.to_payload() -> dict` — JSON-friendly serialization for logging. Renames `event_type` to `event` and renames depth fields to `q_depth_in`/`q_depth_out`/`q_depth_total`. Merges `extra` flat into the payload.
+- `event.metric_samples() -> dict[str, float]` — numeric samples for metrics (`queue_depth_in/out/total`, `attempt`, `trace_inflight`, `trace_pending`, `trace_cancelled` as 0/1, plus `latency_ms` when present; `extra["latency_ms"]` overrides if supplied).
+- `event.tag_values() -> dict[str, str]` — bounded-cardinality tags starting with `event_type`.
+- `event.error_payload` (property) — returns the structured `FlowError` payload when `extra["flow_error"]` is present.
 
 ## Event type catalog
 
@@ -72,35 +79,54 @@ Custom middleware can attach additional events by emitting `FlowEvent` instances
 
 ## `log_flow_events(...)` middleware
 
+Actual signature:
+```python
+log_flow_events(
+    logger: logging.Logger | None = None,
+    *,
+    start_level: int = logging.INFO,
+    success_level: int = logging.INFO,
+    error_level: int = logging.ERROR,
+    latency_callback: Callable[[str, float, FlowEvent], None] | None = None,
+) -> Middleware
+```
+
+Returns a middleware that logs **only** `node_start`, `node_success`, and `node_error` events. All other event types (`node_timeout`, `node_retry`, `node_failed`, `deadline_skip`, `trace_cancel_*`, `node_trace_cancelled`, …) pass through silently — write a custom middleware if you need to log them. There is no `level` or `include_payload` knob; the payload always comes from `event.to_payload()` (plus `error_payload` injected for `node_error`).
+
 ```python
 import logging
 from penguiflow import log_flow_events
 
 mw = log_flow_events(
-    logger=logging.getLogger("penguiflow.flow"),
-    level=logging.INFO,
-    include_payload=True,    # full event.to_payload() in extra
+    logging.getLogger("penguiflow.flow"),
+    start_level=logging.DEBUG,
+    success_level=logging.INFO,
+    error_level=logging.ERROR,
+    latency_callback=lambda name, ms, evt: histogram.observe(ms, tags=[f"event:{name}"]),
 )
 ```
 
-Defaults log each event at the configured level with structured `extra={...}`. Tweak the logger name to route events to a dedicated handler / sink.
+When `logger` is omitted, the middleware uses `logging.getLogger("penguiflow.flow")`. The optional `latency_callback` fires on `node_success`/`node_error` events with `latency_ms` present.
 
 ### Reducing volume
 
 `node_start` and `node_success` dominate volume. Reduce by:
-- Lowering log level for these events specifically (custom middleware filter).
-- Sampling — log every Nth event.
-- Filtering by `node_name` if some nodes are noisy.
+- Raising `start_level` so the start logs sit below your handler threshold.
+- Wrapping `log_flow_events` in a custom middleware that drops or samples events before delegating.
 
 ```python
 def filtered(logger):
     base = log_flow_events(logger)
     async def mw(event):
-        if event.event_type in {"node_start"}: return   # drop
-        if event.event_type == "node_success" and random.random() > 0.1: return
+        if event.event_type == "node_start":
+            return                                       # drop
+        if event.event_type == "node_success" and random.random() > 0.1:
+            return                                       # 10% sample
         await base(event)
     return mw
 ```
+
+To log the events `log_flow_events` ignores (timeouts, retries, deadline skips, cancellations), add a sibling middleware that handles those types explicitly.
 
 ## Custom middleware
 

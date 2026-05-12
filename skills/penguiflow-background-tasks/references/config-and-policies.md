@@ -1,6 +1,6 @@
 # `BackgroundTasksConfig` Reference
 
-Configuration for planner-driven background tasks. Pass to `ReactPlanner(..., background_tasks=BackgroundTasksConfig(...))`.
+Configuration for planner-driven background tasks. Pass to `ReactPlanner(..., background_tasks=BackgroundTasksConfig(...))`. All defaults are from `penguiflow.planner.models.BackgroundTasksConfig`.
 
 ## Enablement
 
@@ -11,13 +11,16 @@ Configuration for planner-driven background tasks. Pass to `ReactPlanner(..., ba
 
 When `enabled=False`, `tasks.*` tools and `task.*` opcodes are not available; spawn attempts fail explicitly.
 
-## Tool-initiated spawns
+## Execution mode and merge
 
 | Field | Default | Purpose |
 |---|---|---|
-| `allow_tool_background` | `False` | When True, tools with `spec.extra["background"]["enabled"]=True` can spawn in background instead of running inline. |
-| `default_mode` | `"subagent"` | `"subagent"` or `"job"`. Subagent runs a full sub-planner; job runs a single tool. |
+| `allow_tool_background` | `False` | When True, tools with `spec.extra["background"]["enabled"]=True` can spawn async instead of running inline. |
+| `default_mode` | `"subagent"` | `"subagent"` (full sub-planner) or `"job"` (single tool). |
 | `default_merge_strategy` | `"HUMAN_GATED"` | `"HUMAN_GATED"`, `"APPEND"`, `"REPLACE"`. Default merge for tool-initiated and explicit spawns. |
+| `context_depth` | `"full"` | `"full"` / `"summary"` / `"minimal"` snapshot depth handed to the spawned task. |
+| `propagate_on_cancel` | `"cascade"` | `"cascade"` (kill children when parent cancels) or `"orphan"`. |
+| `spawn_requires_confirmation` | `False` | When True, spawning a task requires explicit user confirmation. |
 
 ### Tool-initiated path
 
@@ -60,11 +63,12 @@ spec = NodeSpec(
 
 | Field | Default | Purpose |
 |---|---|---|
-| `max_concurrent_tasks` | platform | Hard cap on simultaneous tasks. Spawn fails when exceeded. |
-| `max_tasks_per_session` | platform | Hard cap per session. Reset per session id. |
-| `task_timeout_s` | `None` | Per-task wall-clock timeout. None = no timeout (use sparingly). |
+| `max_concurrent_tasks` | `5` | Hard cap on simultaneous tasks per session. Spawn fails when exceeded. |
+| `max_tasks_per_session` | `50` | Hard cap on total tasks (active + completed) per session. |
+| `task_timeout_s` | `3600` (1 hour, **int** seconds) | Per-task wall-clock timeout. |
+| `max_pending_steering` | `2` | Max steering messages queued per task before backpressure. |
 
-Always set these. Unlimited concurrency on a small executor blocks the foreground; unlimited per-session lets a misbehaving session DoS the worker.
+These defaults are conservative; tune downward for latency-sensitive products and upward for long-running research agents.
 
 ## Proactive reporting (auto-merge modes)
 
@@ -73,7 +77,11 @@ When `default_merge_strategy` is `APPEND` or `REPLACE`, completed tasks merge au
 | Field | Default | Purpose |
 |---|---|---|
 | `proactive_report_enabled` | `False` | When True, the planner notifies the user as tasks complete. |
-| `proactive_report_max_hops` | platform | Max planner hops to delay a report (gives the LLM a chance to integrate). |
+| `proactive_report_strategies` | `["APPEND", "REPLACE"]` | Merge strategies that trigger proactive reports. |
+| `proactive_report_max_queued` | `5` | Max queued reports before dropping oldest. |
+| `proactive_report_timeout_s` | `30.0` | Timeout for proactive message generation. |
+| `proactive_report_max_hops` | `2` | Max recursion hops before disabling background spawning. |
+| `proactive_report_fallback_notification` | `True` | Fall back to notification panel if generation fails. |
 
 For chat UIs, `proactive_report_enabled=True` produces "Heads up — research on segment A is in. Want me to incorporate it?" style messages.
 
@@ -81,9 +89,9 @@ For chat UIs, `proactive_report_enabled=True` produces "Heads up — research on
 
 | Field | Default | Purpose |
 |---|---|---|
-| `default_group_merge_strategy` | `"HUMAN_GATED"` | Strategy applied at `tasks.apply_group`. |
+| `default_group_merge_strategy` | `"APPEND"` | Strategy applied at `tasks.apply_group`. |
 | `default_group_report` | `True` | Produce a single user-facing summary on apply. |
-| `max_tasks_per_group` | platform | Hard cap per group. |
+| `max_tasks_per_group` | `10` | Hard cap per group. |
 
 Groups bundle related background work into one merge. Useful when:
 - Multi-segment research: each segment is a task, the group is the consolidated report.

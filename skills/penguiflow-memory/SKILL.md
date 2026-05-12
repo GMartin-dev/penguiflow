@@ -38,7 +38,7 @@ from penguiflow.planner.memory import (
 )
 
 stm = ShortTermMemoryConfig(
-    strategy="rolling_summary",
+    strategy="rolling_summary",              # default is "none" — must opt in
     budget=MemoryBudget(
         full_zone_turns=5,
         summary_max_tokens=1000,
@@ -49,10 +49,10 @@ stm = ShortTermMemoryConfig(
         tenant_key="tenant_id",
         user_key="user_id",
         session_key="session_id",
-        require_explicit_key=True,           # multi-tenant default
+        require_explicit_key=True,           # library default; keep True in multi-tenant
     ),
-    summarizer_model="gpt-4.1-mini",
-    include_trajectory_digest=True,
+    summarizer_model="gpt-4.1-mini",          # default None
+    include_trajectory_digest=True,           # this is the library default
 )
 ```
 

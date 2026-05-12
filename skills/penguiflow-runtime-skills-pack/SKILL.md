@@ -48,10 +48,13 @@ Pick a format: `*.skill.md` (Markdown + YAML frontmatter, most readable), `*.ski
 ### 3) Wire `SkillsConfig`
 ```python
 SkillsConfig(
-    enabled=True,
-    cache_dir=".cache/skills",
+    enabled=True,                            # default False; must opt in
+    cache_dir=".penguiflow",                 # library default; SQLite store location
     skill_packs=[SkillPackConfig(name="ops", path="skills/packs/ops")],
-    top_k=6, max_tokens=2000, summarize=False, redact_pii=True,
+    top_k=6,                                 # default
+    max_tokens=2000,                         # default (range 200-10000)
+    summarize=False,                         # default
+    redact_pii=True,                         # default
 )
 ```
 Planner gets `skill_search`/`skill_get`/`skill_list` always-visible plus pre-flight injection of `top_k` relevant skills.
@@ -59,13 +62,17 @@ Planner gets `skill_search`/`skill_get`/`skill_list` always-visible plus pre-fli
 ### 4) (Optional) Wire a runtime provider
 ```python
 class TenantSkillProvider(SkillProvider):
-    async def list(self, **kw): ...
-    async def get(self, names, **kw): ...
-    async def search(self, query, **kw): ...
+    # Six required methods — typed queries + keyword-only tool_context/capability_context.
+    async def get_relevant(self, query, *, tool_context, capability_context=None): ...
+    async def search(self, query, *, tool_context, capability_context=None): ...
+    async def get_by_name(self, names, *, tool_context, capability_context=None): ...
+    async def list(self, req, *, tool_context, capability_context=None): ...
+    async def directory(self, config, *, tool_context, capability_context=None): ...
+    async def format_for_injection(self, skills, *, max_tokens): ...
 
 planner = ReactPlanner(
     ...,
-    skills_provider=TenantSkillProvider(),      # or skills_provider_factory=...
+    skills_provider=TenantSkillProvider(),      # or skills_provider_factory=Callable[[SkillsConfig], SkillProvider]
     skills=SkillsConfig(enabled=True, skill_packs=[...]),  # static packs compose
 )
 ```

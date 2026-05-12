@@ -8,21 +8,29 @@ The toolset turns a remote A2A agent into typed planner tools your `ReactPlanner
 from penguiflow_a2a import A2AAgentToolset, A2AHttpTransport
 
 transport = A2AHttpTransport(
-    base_url="https://specialist.example.com",
-    # auth_headers={"Authorization": "Bearer ..."},
+    # No base_url — each agent_url is passed per request.
+    version="0.3",                                       # A2A protocol version sent as A2A-Version header
+    headers={"X-Caller": "manager-prod"},                 # global headers
+    agent_headers={                                       # per-agent overrides (by agent_url)
+        "https://specialist.example.com": {
+            "Authorization": "Bearer ${SPECIALIST_TOKEN}",
+        },
+    },
+    timeout_s=30.0,                                       # fallback timeout
+    # client=httpx.AsyncClient(...),                       # optional injected client
 )
 
 toolset = A2AAgentToolset(
-    agent_url="https://specialist.example.com",
+    agent_url="https://specialist.example.com",           # set per toolset
     transport=transport,
-    agent_card=card,                # optional but recommended
+    agent_card=card,                                       # optional but recommended
     default_timeout_s=30.0,
     default_metadata={"caller": "manager-prod"},
     include_tool_context_keys=("tenant", "session_id", "task_id", "user_id"),
 )
 ```
 
-`include_tool_context_keys` lists which keys from `tool_context` should be forwarded as A2A `metadata` on each call (useful for tenant scoping and observability).
+`include_tool_context_keys` lists which keys from `tool_context` should be forwarded as A2A `metadata` on each call (useful for tenant scoping and observability). The transport itself is agent-agnostic — `agent_url` lives on the `A2AAgentToolset` (or, when using `A2ARouterToolset`, on each candidate).
 
 ## Declaring a tool
 

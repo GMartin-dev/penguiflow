@@ -32,27 +32,27 @@ registry = ModelRegistry()
 rich_nodes = attach_rich_output_nodes(
     registry,
     config=RichOutputConfig(
-        enabled=True,
+        enabled=True,                              # default is False — must opt in
         allowlist=["markdown", "echarts", "datagrid", "report", "grid", "tabs", "accordion"],
+        # include_prompt_catalog=True,             # library default
+        # max_payload_bytes=250_000,               # library default
+        # max_total_bytes=2_000_000,               # library default
     ),
 )
 catalog = build_catalog(list(rich_nodes), registry)
 ```
 
-The `allowlist` is **required** — never allow arbitrary components. Add only what your frontend implements.
+`RichOutputConfig.enabled=False` is the library default — nothing renders until you flip it. `allowlist` defaults to the entire `DEFAULT_ALLOWLIST` (markdown, json, echarts, mermaid, plotly, datagrid, metric, report, grid, tabs, accordion, code, latex, callout, image, video, form, confirm, select_option) — override it explicitly with the subset your frontend implements.
 
-### 2) Add rich-output tools to your always-visible set
-If you use tool discovery (see [[penguiflow-reactplanner-config]]), keep these visible regardless of deferral:
-- `render_component`, `describe_component`, `list_artifacts`
-- `ui_form`, `ui_confirm`, `ui_select_option` (when interactive HITL is enabled)
-- Plus the specific typed `render_*` you enabled (e.g., `render_chart_echarts`).
+### 2) Always-visible set for tool discovery
+Keep these visible regardless of deferral (see [[penguiflow-reactplanner-config]]): `render_component`, `describe_component`, `list_artifacts`, the interactive `ui_form`/`ui_confirm`/`ui_select_option` if enabled, plus any typed `render_*`/`build_*` you wired in.
 
 ### 3) Pick the right tool family
 | Family | Tools | Visible? | Use for |
 |---|---|---|---|
-| Generic renderer | `render_component(component, props, id?, title?, metadata?)` | Yes | Any allowlisted component; escape hatch. |
-| Typed wrappers | `render_chart_echarts`, `render_report`, `render_table`, `render_grid`, `render_tabs`, `render_accordion`, `render_markdown` | Yes | Common components with stricter schemas. |
-| Builders | `build_chart_echarts`, `build_table`, `build_report`, ... | No | Compose reusable payloads; returns `artifact_ref` for later inclusion. |
+| Generic renderer | `render_component(component, props, id?, title?, metadata?)` | Yes | Any allowlisted component; escape hatch. Required for `markdown`, `json`, `mermaid`, `plotly`, `metric`, `code`, `latex`, `callout`, `image`, `video` (no typed wrappers). |
+| Typed wrappers | `render_chart_echarts`, `render_report`, `render_table`, `render_grid`, `render_tabs`, `render_accordion` | Yes | Common components with stricter schemas. |
+| Builders | `build_chart_echarts`, `build_table`, `build_grid`, `build_tabs`, `build_accordion` (no `build_report`/`build_markdown`) | No | Compose reusable payloads; returns `artifact_ref` for later inclusion. |
 | Interactive (HITL) | `ui_form`, `ui_confirm`, `ui_select_option` | Yes (pauses planner) | Structured user input — pairs with [[penguiflow-hitl-pause-resume]]. |
 | Introspection | `describe_component(name)`, `list_artifacts(...)` | Yes (no UI emit) | Discover what's renderable; list prior artifacts in this run. |
 

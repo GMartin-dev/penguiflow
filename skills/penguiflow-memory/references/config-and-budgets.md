@@ -36,9 +36,9 @@ Pick `truncation` first. Switch to `rolling_summary` only after measuring prompt
 The LLM used to refresh the rolling summary. Use a cheap, fast model (`gpt-4.1-mini`, `claude-haiku`). Summarizer failures degrade health; persistent failures keep memory in `truncation` mode.
 
 ### `include_trajectory_digest`
-When `True`, every turn carries a compressed digest of tool usage and observations (`TrajectoryDigest`). Increases prompt size but lets the model reason about prior tool decisions. Default `False`.
+When `True` (the default), every turn carries a compressed digest of tool usage and observations (`TrajectoryDigest`). Increases prompt size but lets the model reason about prior tool decisions. Set to `False` to trim prompts.
 
-### `recovery_backlog_limit`, `retry_attempts`, `retry_backoff_base_s`, `degraded_retry_interval_s`
+### `recovery_backlog_limit` (default 20), `retry_attempts` (default 3), `retry_backoff_base_s` (default 2.0), `degraded_retry_interval_s` (default 30.0)
 Backoff knobs for summarizer recovery. Defaults are reasonable; tune only if you have visibility into summarizer error rates.
 
 ### `token_estimator`
@@ -84,18 +84,18 @@ MemoryIsolation(
     tenant_key: str = "tenant_id",
     user_key: str = "user_id",
     session_key: str = "session_id",
-    require_explicit_key: bool = False,
+    require_explicit_key: bool = True,        # fail-closed by default
 )
 ```
 
-`tenant_key`/`user_key`/`session_key` are dotted paths looked up in `tool_context`. The composite key is `f"{tenant}:{user}:{session}"`.
+`tenant_key`/`user_key`/`session_key` are paths looked up in `tool_context`. The composite key is `f"{tenant}:{user}:{session}"` (also exposed via `MemoryKey.composite()`).
 
 | `require_explicit_key` | Behavior |
 |---|---|
-| `False` | Try to derive from `tool_context`; if missing, use an anonymous key. **Not safe for multi-tenant.** |
-| `True` | Memory only activates if a key is resolvable (explicit or fully derived). Otherwise silently disabled. **Required for multi-tenant services.** |
+| `True` (default) | Memory only activates if a key is resolvable (explicit or fully derived). Otherwise silently disabled. The library's fail-closed default. |
+| `False` | Try to derive from `tool_context`; if missing, use an anonymous key. **Unsafe for multi-tenant** — only flip this for single-tenant prototypes. |
 
-The fail-closed behavior is intentional. If you can't safely scope memory, don't use memory.
+The fail-closed default is intentional. If you can't safely scope memory, don't use memory.
 
 ## `MemoryKey`
 
@@ -167,11 +167,14 @@ Shape varies by strategy and health. Inspect this in dev to verify what the mode
 
 ## Defaults summary
 
-| Setting | Multi-tenant default | Prototype default |
-|---|---|---|
-| `strategy` | `truncation` (start), `rolling_summary` (later) | `truncation` |
-| `full_zone_turns` | 3-5 | 5-8 |
-| `overflow_policy` | `truncate_oldest` | `truncate_oldest` |
-| `require_explicit_key` | `True` | `False` |
-| `include_trajectory_digest` | `False` | `False` |
-| `memory_key` source | Explicit | Derived |
+| Setting | Library default | Multi-tenant recommendation | Prototype |
+|---|---|---|---|
+| `strategy` | `"none"` (off) | `"truncation"` to start, `"rolling_summary"` later | `"truncation"` |
+| `full_zone_turns` | `5` | 3-5 | 5-8 |
+| `summary_max_tokens` | `1000` | 800-1000 | unchanged |
+| `total_max_tokens` | `10000` | 8000 | 16000 |
+| `overflow_policy` | `"truncate_oldest"` | `"truncate_oldest"` | `"truncate_oldest"` |
+| `require_explicit_key` | `True` (fail-closed) | `True` | `False` if single-tenant |
+| `include_trajectory_digest` | `True` | `False` for tight token budgets | unchanged |
+| `summarizer_model` | `None` | `"gpt-4o-mini"` or similar | unchanged |
+| `memory_key` source | n/a | Explicit `MemoryKey(...)` | Derived from `tool_context` |
