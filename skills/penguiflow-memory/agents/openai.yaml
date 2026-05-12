@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Short-Term Memory"
+  short_description: "Bounded, multi-tenant-safe conversation memory for ReactPlanner"
+  default_prompt: "Help me add conversation memory to PenguiFlow's ReactPlanner. Configure ShortTermMemoryConfig (truncation vs rolling_summary), MemoryBudget caps + overflow policy, MemoryIsolation with explicit MemoryKey for multi-tenant safety, optional StateStore persistence, and hooks (on_turn_added, on_summary_updated, on_health_changed)."

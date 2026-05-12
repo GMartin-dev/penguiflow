@@ -839,6 +839,7 @@ class A2AService:
             artifact,
             append=chunk.seq > 0,
             last_chunk=chunk.done,
+            metadata=chunk.meta or None,
         )
 
     async def _handle_final_payload(

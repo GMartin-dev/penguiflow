@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Observability"
+  short_description: "Structured logging, metrics, and topology export"
+  default_prompt: "Help me add observability to a PenguiFlow runtime: structured logging via configure_logging, log_flow_events middleware, FlowEvent-derived metrics (counters/histograms/gauges) with safe cardinality, FlowError tracing, dashboards and alerts, and topology export with flow_to_mermaid/flow_to_dot."

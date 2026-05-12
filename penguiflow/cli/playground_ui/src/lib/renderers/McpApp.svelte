@@ -183,8 +183,10 @@
 })();
 <\/script>`;
 
-    if (rawHtml.includes('</head>')) {
-      return rawHtml.replace('</head>', cspMeta + bridge + '</head>');
+    const headOpen = rawHtml.match(/<head\b[^>]*>/i);
+    if (headOpen?.index !== undefined) {
+      const insertAt = headOpen.index + headOpen[0].length;
+      return rawHtml.slice(0, insertAt) + cspMeta + bridge + rawHtml.slice(insertAt);
     }
     if (rawHtml.includes('<body>')) {
       return rawHtml.replace('<body>', '<body>' + cspMeta + bridge);

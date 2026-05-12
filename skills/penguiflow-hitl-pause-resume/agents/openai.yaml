@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow HITL Pause/Resume"
+  short_description: "Human-in-the-loop pause and resume for ReactPlanner"
+  default_prompt: "Help me wire human-in-the-loop pauses into PenguiFlow's ReactPlanner. Cover ctx.pause(reason, payload) from tools (approval/await_input/external_event/constraints_conflict), consuming PlannerPause in the host app, calling planner.resume(resume_token, ...), and persisting pause records across workers via a StateStore implementing save_planner_state/load_planner_state."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Streaming"
+  short_description: "Protocol-agnostic streaming with StreamChunk + SSE/WebSocket"
+  default_prompt: "Help me stream partial output from a PenguiFlow flow. Cover StreamChunk emission via ctx.emit_chunk(parent=msg, ...), routing chunks to a dedicated sink node, shipping them to clients via format_sse_event/chunk_to_ws_json/stream_flow/emit_stream_events, and a final FinalAnswer pattern."

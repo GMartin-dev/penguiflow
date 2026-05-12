@@ -3045,7 +3045,7 @@ wheels = [
 
 [[package]]
 name = "penguiflow"
-version = "3.6.4"
+version = "3.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

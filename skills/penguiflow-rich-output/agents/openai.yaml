@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Rich Output"
+  short_description: "Charts, tables, reports, and interactive UI components"
+  default_prompt: "Help me add rich output to PenguiFlow's ReactPlanner. Enable RichOutputConfig + attach_rich_output_nodes, pick between render_component / typed render_* wrappers / build_* builders / interactive ui_form|ui_confirm|ui_select_option, and consume artifact_chunk events with artifact_type=ui_component on the frontend."
