@@ -20,5 +20,5 @@ def test_package_version_is_current_prerelease() -> None:
     pyproject = ROOT / "pyproject.toml"
     init = ROOT / "penguiflow" / "__init__.py"
 
-    assert 'version = "3.7.0a6"' in pyproject.read_text(encoding="utf-8")
-    assert '__version__ = "3.7.0a6"' in init.read_text(encoding="utf-8")
+    assert 'version = "3.7.0"' in pyproject.read_text(encoding="utf-8")
+    assert '__version__ = "3.7.0"' in init.read_text(encoding="utf-8")

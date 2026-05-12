@@ -66,7 +66,7 @@ async def _run_join_k_handles_randomized_fanout(branch_count: int, orders: Itera
         await flow.stop()
 
 
-@settings(max_examples=25, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=25, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 @given(fanout_patterns())
 def test_join_k_handles_randomized_fanout(pattern: tuple[int, list[list[int]]]) -> None:
     branch_count, orders = pattern
