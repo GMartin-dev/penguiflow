@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Background Tasks"
+  short_description: "Spawn subagent and tool jobs from the planner"
+  default_prompt: "Help me add background tasks to a PenguiFlow ReactPlanner: BackgroundTasksConfig, a TaskService implementation, exposing tasks.* tools, subagent vs job modes, HUMAN_GATED/APPEND/REPLACE merge strategies, task groups, and tool-initiated background spawns."
