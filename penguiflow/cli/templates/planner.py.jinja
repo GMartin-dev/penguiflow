@@ -45,9 +45,13 @@ from .external_tools import get_external_tool_specs, setup_external_tools
 {% endif %}
 
 
+# <penguiflow:managed system-prompt>
 SYSTEM_PROMPT_EXTRA = """{{ system_prompt_extra }}"""
+# </penguiflow:managed system-prompt>
 {% if include_memory_prompt %}
+# <penguiflow:managed memory-prompt>
 MEMORY_PROMPT = """{{ memory_prompt }}"""
+# </penguiflow:managed memory-prompt>
 {% endif %}
 
 

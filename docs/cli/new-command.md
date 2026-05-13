@@ -15,6 +15,7 @@ Use it when you want a runnable project skeleton with:
 - This command does not validate your LLM credentials or tool connectivity (use `penguiflow dev` and `penguiflow tools` for that).
 - The scaffold is a starting point; you are expected to edit prompts, tool definitions, policies, and deployment wiring.
 - The command will not overwrite existing files unless you pass `--force`.
+- This command is for initial project creation, not for adding tools to an already customized project.
 
 ## Contract surface
 
@@ -70,6 +71,7 @@ Choose based on how you will operate the system:
 - Use `--dry-run` in repos to avoid accidental writes.
 - Prefer `react` unless you already know you’re building a pure runtime DAG.
 - Prefer envelope-style messaging and `trace_id` scoping in production systems (see **[Messages & envelopes](../core/messages-and-envelopes.md)**).
+- After you implement tools or customize planner/orchestrator code, use **[`penguiflow apply`](apply-command.md)** for spec changes instead of running `new` or `generate --force` again.
 
 ## Runnable example (typical usage)
 
@@ -100,3 +102,4 @@ This command is pure file I/O. Operational observability starts when you run the
 
 - Run `penguiflow new --help` and confirm the template/flag names you expect exist.
 - If scaffolding works for one developer but not another, confirm you’re using the same venv and that Jinja2 is installed.
+- If you only need to add a new tool, add it to `agent.yaml` and run `penguiflow apply --spec agent.yaml`; do not scaffold the project again.

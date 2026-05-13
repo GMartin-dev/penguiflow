@@ -434,5 +434,86 @@ def generate(
         sys.exit(1)
 
 
+@app.command()
+@click.option(
+    "--spec",
+    "-s",
+    "spec_path",
+    type=click.Path(exists=True, path_type=str),
+    required=True,
+    help="Path to the agent spec YAML file.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=str),
+    default=None,
+    help="Directory containing the project directory (defaults to cwd).",
+)
+@click.option(
+    "--check",
+    is_flag=True,
+    help="Preview reconciliation without writing files; exits non-zero if changes are needed.",
+)
+@click.option(
+    "--diff",
+    "show_diff",
+    is_flag=True,
+    help="Show unified diffs for managed updates.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Replace markerless generated wiring files. Tool implementation files are still preserved.",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress output messages.",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed apply progress.",
+)
+def apply(
+    spec_path: str,
+    output_dir: str | None,
+    check: bool,
+    show_diff: bool,
+    force: bool,
+    quiet: bool,
+    verbose: bool,
+) -> None:
+    """Safely reconcile an existing project with an agent spec."""
+    from pathlib import Path
+
+    from .apply import run_apply
+    from .init import CLIError
+    from .spec_errors import SpecValidationError
+
+    try:
+        result = run_apply(
+            spec_path=Path(spec_path),
+            output_dir=Path(output_dir) if output_dir else None,
+            check=check,
+            diff=show_diff,
+            force=force,
+            quiet=quiet,
+            verbose=verbose,
+        )
+        if not result.success:
+            sys.exit(1)
+    except SpecValidationError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    except CLIError as e:
+        click.echo(f"✗ {e.message}", err=True)
+        if e.hint:
+            click.echo(f"  Hint: {e.hint}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

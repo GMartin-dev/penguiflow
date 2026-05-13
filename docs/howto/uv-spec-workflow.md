@@ -161,11 +161,14 @@ async def echo(args: EchoArgs, ctx: ToolContext) -> EchoResult:
     return EchoResult(message=args.message)
 ```
 
-If you want to regenerate later, treat these as generated/overwritten on `penguiflow generate`:
+If you want to add another tool later, edit `echo-agent/agent.yaml` and use `penguiflow apply` instead of running the scaffold again:
 
-- `echo-agent/src/echo_agent/planner.py`
-- `echo-agent/src/echo_agent/config.py`
-- `echo-agent/src/echo_agent/tools/__init__.py`
+```bash
+uv run penguiflow apply --spec agent.yaml --check --diff
+uv run penguiflow apply --spec agent.yaml
+```
+
+`apply` creates missing tool stubs and updates managed wiring while preserving existing tool implementations.
 
 ## Advanced config knobs
 
@@ -350,7 +353,8 @@ All of these can be overridden without regenerating:
 
 - Do not commit `.env`.
 - Avoid putting real secrets in `.env.example`.
-- Re-run `penguiflow generate --spec ...` after spec edits; expect some generated files to be overwritten.
+- Use `penguiflow apply --spec agent.yaml` after spec edits once implementation has started.
+- Reserve `penguiflow generate --spec ... --force` for intentional regeneration of generated files.
 
 ## Appendix A: Full spec example (all knobs)
 
