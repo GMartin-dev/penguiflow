@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,5 +21,12 @@ def test_package_version_is_current_prerelease() -> None:
     pyproject = ROOT / "pyproject.toml"
     init = ROOT / "penguiflow" / "__init__.py"
 
-    assert 'version = "3.7.0"' in pyproject.read_text(encoding="utf-8")
-    assert '__version__ = "3.7.0"' in init.read_text(encoding="utf-8")
+    pyproject_text = pyproject.read_text(encoding="utf-8")
+    init_text = init.read_text(encoding="utf-8")
+
+    pyproject_match = re.search(r'^version = "([^"]+)"', pyproject_text, re.MULTILINE)
+    init_match = re.search(r'^__version__ = "([^"]+)"', init_text, re.MULTILINE)
+
+    assert pyproject_match is not None
+    assert init_match is not None
+    assert pyproject_match.group(1) == init_match.group(1)
