@@ -15,9 +15,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   planner pause mapping, push notification config client helpers, agent registry scoring, and router delegation tools.
 - Experimental A2A router Phase 4/5 API freeze candidate, including router policy guardrails, declarative registry
   loading, per-agent A2A auth headers, route decision metadata, and tag-triggered PyPI prerelease publishing.
+- `penguiflow apply` for safe, Ansible-style reconciliation of spec changes into existing projects without
+  overwriting implemented tool files.
 
 ### Changed
 - Root README rewritten to be a concise “front door” with stable links.
+- Generated tool registries and planner prompt constants now include managed markers so future `apply` runs can update
+  only PenguiFlow-owned blocks.
+- `penguiflow generate --init` now emits updated assistant instructions that direct ongoing changes through
+  `penguiflow apply`.
 
 ## 2.12.1
 

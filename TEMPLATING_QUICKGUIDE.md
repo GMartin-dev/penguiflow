@@ -303,6 +303,16 @@ my-agent/
 
 #### Adding New Tools
 
+For projects that were created from a YAML spec and already contain implemented tools, prefer the safe reconcile workflow:
+
+```bash
+# edit agent.yaml and add the new tools: entry
+penguiflow apply --spec=agent.yaml --check --diff
+penguiflow apply --spec=agent.yaml
+```
+
+`apply` creates missing tool stubs, updates managed registry/prompt wiring, and preserves existing tool implementations. Do not rerun scaffolding with overwrite flags just to add a tool.
+
 1. Create `src/my_agent/tools/my_tool.py`:
 
 ```python
@@ -1440,13 +1450,14 @@ For detailed implementation guides:
 
 **New in v2.6**: Define your agent declaratively in YAML and generate production-ready code.
 
-Instead of manually creating tools and wiring the planner, describe what you want in a spec file and let the generator create everything for you.
+Instead of manually creating the first project layout and wiring the planner, describe the initial agent in a spec file and let the generator bootstrap it. After you implement tools or customize planner/orchestrator code, use `penguiflow apply` for ongoing spec changes.
 
 ### When to Use Generate vs New
 
 | Approach | Best For |
 |----------|----------|
-| `penguiflow generate` (recommended) | Spec-driven development, reproducible scaffolding, team handoff, CI consistency |
+| `penguiflow generate` | First-time spec-driven bootstrap, reproducible scaffolding, team handoff |
+| `penguiflow apply` (recommended after implementation starts) | Adding tools, updating managed prompt/registry wiring, safe reconciliation |
 | `penguiflow new` | Quick start, exploring templates, learning patterns (then migrate to spec) |
 
 ### Generator Command
@@ -1469,9 +1480,17 @@ penguiflow generate --init my-agent [--output-dir=.] [--force]
 | `--init` | Create a new spec workspace (mutually exclusive with `--spec`) |
 | `--output-dir` | Directory for the project (default: current directory) |
 | `--dry-run` | Preview files without creating them |
-| `--force` | Overwrite existing files |
+| `--force` | Overwrite existing files; do not use for normal tool additions |
 | `--verbose`, `-v` | Show detailed generation progress |
 | `--quiet`, `-q` | Suppress output messages |
+
+### Apply Command for Existing Projects
+
+```bash
+penguiflow apply --spec=agent.yaml [--output-dir=.] [--check] [--diff] [--force]
+```
+
+Use this after generated tool files contain real implementation. It creates missing tool stubs, updates managed blocks in `tools/__init__.py`, updates managed prompt constants in `planner.py`, and refreshes `agent.yaml` for the playground. Existing `tools/*.py` implementations are never overwritten by default.
 
 ### Spec Format
 
@@ -2162,7 +2181,14 @@ ARTIFACT_STORE_CLEANUP_STRATEGY=lru
    # Edit src/my_agent/tools/*.py to add your logic
    ```
 
-6. **Run and test:**
+6. **Add future tools safely:**
+   ```bash
+   # Edit agent.yaml with the new tool definition.
+   penguiflow apply --spec=agent.yaml --check --diff
+   penguiflow apply --spec=agent.yaml
+   ```
+
+7. **Run and test:**
    ```bash
    uv sync
    cp .env.example .env

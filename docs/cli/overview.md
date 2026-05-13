@@ -8,6 +8,7 @@ PenguiFlow ships a CLI to bootstrap agent projects, run the playground, and vali
 - `penguiflow dev` runs the playground (backend + UI) for a project
 - `penguiflow init` generates VS Code helpers (`.vscode/*`)
 - `penguiflow generate` generates an agent workspace from a YAML spec
+- `penguiflow apply` safely reconciles an existing generated project with a YAML spec
 - `penguiflow tools` lists/connects ToolNode presets and can discover tool names
 
 Use the CLI when you want a repeatable “scaffold → run → iterate” loop and you want to avoid bespoke glue code on day 1.
@@ -22,7 +23,7 @@ Use the CLI when you want a repeatable “scaffold → run → iterate” loop a
 
 - Installed command: `penguiflow` (see `penguiflow --help`)
 - Required extras:
-  - `penguiflow new` / `penguiflow generate` require `jinja2` (install `penguiflow[cli]` or `penguiflow[dev]`)
+  - `penguiflow new` / `penguiflow generate` / `penguiflow apply` require `jinja2` (install `penguiflow[cli]` or `penguiflow[dev]`)
   - `penguiflow tools` discovery requires `penguiflow[planner]`
 
 ## Operational defaults (recommended workflows)
@@ -44,6 +45,14 @@ cd my-agent
 # edit my-agent.yaml
 uv run penguiflow generate --spec my-agent.yaml
 uv run penguiflow dev --project-root .
+```
+
+After implementing tools or customizing planner/orchestrator code, use `penguiflow apply` for further spec changes:
+
+```bash
+# edit agent.yaml, for example add a new tools: entry
+uv run penguiflow apply --spec agent.yaml --check --diff
+uv run penguiflow apply --spec agent.yaml
 ```
 
 ### Workflow C: validate ToolNode connectivity
