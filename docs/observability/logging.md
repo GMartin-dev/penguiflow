@@ -10,6 +10,8 @@ Use this page when you want:
 - trace-correlated debugging (`trace_id`),
 - a reliable way to observe node lifecycle (success/error/timeout/retry).
 
+Start with **[Observability overview](overview.md)** if you need the full telemetry model across runtime, planner, LLM, and task/session layers.
+
 ## Non-goals / boundaries
 
 - PenguiFlow does not ship a vendor-specific logging integration (Datadog, ELK, Splunk).
@@ -131,5 +133,6 @@ if __name__ == "__main__":
 
 ## Troubleshooting checklist
 
+- Need the full event model: see **[Observability overview](overview.md)**.
 - Need production event patterns: see **[Telemetry patterns](telemetry-patterns.md)**.
 - Need dashboards + alerts: see **[Metrics & alerts](metrics-and-alerts.md)**.

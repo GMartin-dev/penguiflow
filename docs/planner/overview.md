@@ -161,6 +161,7 @@ if __name__ == "__main__":
 ## Key integrations
 
 - Production configuration: **[Configuration](configuration.md)**
+- Reflection and answer-quality control: **[Reflection loop](reflection-loop.md)**
 - Tool discovery and per-tenant filtering: **[Tool discovery & filtering](tool-discovery-and-filtering.md)**
 - Tool execution: **[Tooling](tooling.md)** (ToolNode for MCP/UTCP/HTTP)
 - Rich UI outputs: **[Rich output](rich-output.md)**

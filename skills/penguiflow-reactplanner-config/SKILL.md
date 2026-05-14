@@ -7,6 +7,7 @@ description: Configure PenguiFlow ReactPlanner in production codebases (native L
 
 Use this skill when you need to **wire, audit, or harden** a ReactPlanner integration:
 - Enable the **native LLM layer** (`use_native_llm=True`) and keep JSON schema mode reliable.
+- Explain or rollout the built-in **reflection loop** for post-answer quality control via [[penguiflow-reflection-loop]].
 - Turn on **tool discovery** (`tool_search`/`tool_get`) with **deferred tool activation**.
 - Enable **skills** (`skill_search`/`skill_get`/`skill_list`) and keep them safe under allowlists.
 - Wire **runtime skills providers** (`skills_provider` / `skills_provider_factory`) for persona- or request-scoped skills.
