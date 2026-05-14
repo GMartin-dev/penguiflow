@@ -10,6 +10,8 @@ PenguiFlow ships structured runtime events (`FlowEvent`), but it does not ship a
 
 Use it when you are deploying a worker/service fleet and want predictable detection for saturation, timeouts, and error storms.
 
+Start with **[Observability overview](overview.md)** if you need the full telemetry model across runtime, planner, LLM, and task/session layers.
+
 ## Non-goals / boundaries
 
 - This page does not require Prometheus/Datadog/etc. (the patterns apply to any backend).
@@ -154,6 +156,7 @@ if __name__ == "__main__":
 
 ## Troubleshooting checklist
 
+- **Wrong telemetry surface**: this page is runtime-metrics focused. For planner, LLM, or task/session telemetry, start at **[Observability overview](overview.md)**.
 - **No metrics**: ensure your middleware is attached to the flow and your exporter is running.
 - **Too many time series**: remove labels (never add `trace_id`).
 - **Latency numbers look wrong**: ensure you only observe latency when `event.latency_ms` is present.

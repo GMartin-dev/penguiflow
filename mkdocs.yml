@@ -86,6 +86,7 @@ nav:
   - Planner (ReactPlanner):
       - Overview: planner/overview.md
       - Configuration: planner/configuration.md
+      - Reflection loop: planner/reflection-loop.md
       - Tool discovery & filtering: planner/tool-discovery-and-filtering.md
       - Actions & schema: planner/actions-and-schema.md
       - Auto-Seq: planner/auto-seq.md
@@ -119,6 +120,7 @@ nav:
       - Production deployment: deployment/production-deployment.md
       - Distributed execution: deployment/distributed-execution.md
   - Observability:
+      - Overview: observability/overview.md
       - Logging: observability/logging.md
       - Metrics & alerts: observability/metrics-and-alerts.md
       - Telemetry patterns: observability/telemetry-patterns.md
