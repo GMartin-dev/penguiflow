@@ -8,6 +8,8 @@ This page documents how to observe and operate `ReactPlanner` in production:
 - what to log and what to redact
 - what to monitor and alert on
 
+For the full cross-layer model, start with **[Observability overview](../observability/overview.md)**.
+
 ## Non-goals / boundaries
 
 - This page does not mandate a specific telemetry backend (Datadog, Prometheus, OpenTelemetry).
@@ -91,6 +93,7 @@ Prefer:
 
 ## Troubleshooting checklist
 
+- **Wrong layer**: planner events do not replace runtime `FlowEvent`, LLM telemetry hooks, or task/session telemetry. See **[Observability overview](../observability/overview.md)**.
 - **No planner events**: confirm `event_callback` is passed and not overwritten by per-session dispatch.
 - **Missing stream chunks**: verify `stream_final_response` and tool streaming usage; confirm UI is wired to the stream sink.
 - **High tool error rate**: tighten retries/timeouts and reduce concurrency to respect rate limits.

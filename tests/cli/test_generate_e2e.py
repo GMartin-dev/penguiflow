@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
 from click.testing import CliRunner
 
 from penguiflow.cli import app
+from penguiflow.cli.apply import run_apply
 from penguiflow.cli.generate import run_generate
 
 
@@ -126,6 +128,52 @@ def _write_spec_with_background_tasks(path: Path) -> None:
                 max_tasks_per_session: 10
                 task_timeout_s: 600
                 max_pending_steering: 2
+            """
+        )
+    )
+
+
+def _write_spec_with_added_tool(path: Path) -> None:
+    path.write_text(
+        dedent(
+            """\
+            agent:
+              name: demo-gen
+              description: Demo agent
+              template: react
+              flags:
+                streaming: true
+                memory: true
+            tools:
+              - name: fetch_data
+                description: Fetch data from source
+                side_effects: read
+                tags: ["io"]
+                args:
+                  query: str
+                  limit: Optional[int]
+                result:
+                  items: list[str]
+              - name: normalize_data
+                description: Normalize fetched data
+                side_effects: pure
+                tags: ["transform"]
+                args:
+                  items: list[str]
+                result:
+                  normalized: list[str]
+            llm:
+              primary:
+                model: gpt-4o
+            planner:
+              max_iters: 9
+              hop_budget: 5
+              absolute_max_parallel: 3
+              system_prompt_extra: |
+                You are helpful.
+                Use normalize_data after fetch_data when data needs cleanup.
+              memory_prompt: |
+                Use memory responsibly.
             """
         )
     )
@@ -273,6 +321,181 @@ def test_run_generate_includes_background_tasks_wiring(tmp_path: Path) -> None:
     assert "InProcessTaskService" in orchestrator_content
     assert "in-process fallback" in orchestrator_content
     assert "state_store" in orchestrator_content
+
+
+def test_run_apply_adds_tool_without_overwriting_existing_implementation(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+    result = run_generate(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        force=True,
+        quiet=True,
+    )
+    assert result.success
+
+    project_dir = tmp_path / "demo-gen"
+    package_dir = project_dir / "src" / "demo_gen"
+    fetch_tool = package_dir / "tools" / "fetch_data.py"
+    fetch_tool.write_text(fetch_tool.read_text() + "\nCUSTOM_SENTINEL = True\n")
+
+    _write_spec_with_added_tool(spec_path)
+    apply_result = run_apply(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        quiet=True,
+    )
+
+    assert apply_result.success
+    assert "CUSTOM_SENTINEL = True" in fetch_tool.read_text()
+    assert (package_dir / "tools" / "normalize_data.py").exists()
+    assert (project_dir / "tests" / "test_tools" / "test_normalize_data.py").exists()
+
+    tools_init = (package_dir / "tools" / "__init__.py").read_text()
+    assert "normalize_data" in tools_init
+    assert 'registry.register("normalize_data"' in tools_init
+    assert 'Node(normalize_data, name="normalize_data")' in tools_init
+
+    planner = (package_dir / "planner.py").read_text()
+    assert "Use normalize_data after fetch_data" in planner
+
+    agent_yaml = (project_dir / "agent.yaml").read_text()
+    assert "normalize_data" in agent_yaml
+
+
+def test_apply_check_reports_changes_without_writing(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+    result = run_generate(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        force=True,
+        quiet=True,
+    )
+    assert result.success
+
+    _write_spec_with_added_tool(spec_path)
+    apply_result = run_apply(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        check=True,
+        quiet=True,
+    )
+
+    project_dir = tmp_path / "demo-gen"
+    assert not apply_result.success
+    assert any(path.endswith("normalize_data.py") for path in apply_result.changed)
+    assert not (project_dir / "src" / "demo_gen" / "tools" / "normalize_data.py").exists()
+
+
+def test_run_apply_from_project_root_does_not_create_nested_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+    result = run_generate(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        force=True,
+        quiet=True,
+    )
+    assert result.success
+
+    project_dir = tmp_path / "demo-gen"
+    project_spec = project_dir / "agent.yaml"
+    _write_spec_with_added_tool(project_spec)
+
+    monkeypatch.chdir(project_dir)
+    apply_result = run_apply(
+        spec_path=Path("agent.yaml"),
+        check=True,
+        quiet=True,
+    )
+
+    assert not apply_result.success
+    assert apply_result.project_dir == project_dir
+    assert any(path.endswith("src/demo_gen/tools/normalize_data.py") for path in apply_result.changed)
+    assert not (project_dir / "demo-gen").exists()
+
+
+def test_run_apply_accepts_project_root_output_dir(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+    result = run_generate(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        force=True,
+        quiet=True,
+    )
+    assert result.success
+
+    project_dir = tmp_path / "demo-gen"
+    project_spec = project_dir / "agent.yaml"
+    _write_spec_with_added_tool(project_spec)
+
+    apply_result = run_apply(
+        spec_path=project_spec,
+        output_dir=project_dir,
+        check=True,
+        quiet=True,
+    )
+
+    assert not apply_result.success
+    assert apply_result.project_dir == project_dir
+    assert any(path.endswith("src/demo_gen/tools/normalize_data.py") for path in apply_result.changed)
+    assert not (project_dir / "demo-gen").exists()
+
+
+def test_apply_cli_check_exits_non_zero_when_changes_are_needed(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+    result = run_generate(
+        spec_path=spec_path,
+        output_dir=tmp_path,
+        force=True,
+        quiet=True,
+    )
+    assert result.success
+
+    _write_spec_with_added_tool(spec_path)
+    runner = CliRunner()
+    cli_result = runner.invoke(
+        app,
+        [
+            "apply",
+            "--spec",
+            str(spec_path),
+            "--output-dir",
+            str(tmp_path),
+            "--check",
+        ],
+    )
+
+    assert cli_result.exit_code == 1
+    assert "Would create" in cli_result.output
+
+
+def test_apply_cli_bootstrap_check_uses_create_label(tmp_path: Path) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    _write_spec(spec_path)
+
+    runner = CliRunner()
+    cli_result = runner.invoke(
+        app,
+        [
+            "apply",
+            "--spec",
+            str(spec_path),
+            "--output-dir",
+            str(tmp_path),
+            "--check",
+        ],
+    )
+
+    assert cli_result.exit_code == 1
+    assert "Would create" in cli_result.output
+    assert "Would change" not in cli_result.output
 
 
 def test_generate_cli_dry_run(tmp_path: Path) -> None:

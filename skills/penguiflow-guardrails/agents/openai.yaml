@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Guardrails"
+  short_description: "Policy enforcement: STOP/PAUSE/RETRY/REDACT for ReactPlanner"
+  default_prompt: "Help me add guardrails to a PenguiFlow ReactPlanner. Wire a GuardrailGateway with rules that inspect llm_before/tool_call_start/tool_call_result/llm_stream_chunk events and return STOP/PAUSE/RETRY/REDACT/ALLOW decisions. Cover shadow vs enforce mode, FAST vs DEEP rule classification, fail-open trade-offs, and the separate ObservationGuardrailConfig reliability clamp."

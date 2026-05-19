@@ -13,11 +13,14 @@
 
 Use it when you want a spec-first, repeatable “declarative config → code” pipeline.
 
+For ongoing development on a project that already contains implemented tools or custom planner/orchestrator code, use **[`penguiflow apply`](apply-command.md)** instead. `generate` is a bootstrap command; `apply` is the safe reconciliation command.
+
 ## Non-goals / boundaries
 
 - This is not a full codegen platform. The generated code is intentionally simple and intended to be edited.
 - The spec is not a secrets store; do not put credentials in YAML committed to git.
 - `--init` is a workspace bootstrapper; it is not “dry-run safe” (see constraints below).
+- Do not use `generate --force` to add a tool to an existing customized project; it can replace generated planner/config/wiring files.
 
 ## Contract surface
 
@@ -62,8 +65,8 @@ The spec is parsed and validated with line-numbered error reporting. Highlights:
 
 ## Operational defaults (recommended)
 
-- Treat YAML as *source of truth*, but commit generated code only if your org prefers checked-in artifacts.
-- Run generation in CI for drift detection if you keep the spec authoritative.
+- Treat YAML as *source of truth* for bootstrap and playground discovery.
+- After tool implementations exist, use `penguiflow apply --spec agent.yaml --check --diff` for drift detection.
 - Keep `agent.yaml` in sync (it is what the playground discovers).
 
 ## Runnable examples
@@ -78,7 +81,16 @@ uv run penguiflow generate --spec my-agent.yaml --verbose
 uv run penguiflow dev --project-root .
 ```
 
-### 2) Minimal spec excerpt (tools + external tools)
+### 2) Ongoing development: add a tool safely
+
+```bash
+# edit agent.yaml and add tools: - name: normalize_data ...
+uv run penguiflow apply --spec agent.yaml --check --diff
+uv run penguiflow apply --spec agent.yaml
+# implement src/<package>/tools/normalize_data.py
+```
+
+### 3) Minimal spec excerpt (tools + external tools)
 
 ```yaml
 agent:
@@ -113,6 +125,7 @@ external_tools:
 - **You used OAuth without HITL**: set `agent.flags.hitl: true` or switch auth to bearer/none.
 - **Files skipped**: output already exists; use `--force` intentionally.
 - **Generator crashes on templates**: ensure Jinja2 is installed (`penguiflow[cli]`).
+- **You need to add a tool after implementation started**: add the tool to `agent.yaml`, run `penguiflow apply`, then implement the new tool file. Existing tool files are preserved.
 
 ## Observability
 
@@ -129,4 +142,5 @@ external_tools:
 ## Troubleshooting checklist
 
 - If the playground can’t find your spec, confirm `agent.yaml` exists at the project root (generation writes it).
-- If code generation overwrote edits, move hand-written code into separate modules and keep generated targets distinct (or use `--force` sparingly).
+- If you need to reconcile spec changes without replacing implementation code, use `penguiflow apply`.
+- If a markerless wiring file is skipped by `apply`, inspect it manually or run `penguiflow apply --force` only after confirming it is generated code you are willing to refresh.

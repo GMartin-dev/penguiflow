@@ -5,16 +5,20 @@ from __future__ import annotations
 from penguiflow.node import Node
 from penguiflow.registry import ModelRegistry
 
+# <penguiflow:managed tool-imports>
 {% for tool in tools %}
 from .{{ tool.name }} import {{ tool.class_name }}Args, {{ tool.class_name }}Result, {{ tool.name }}
 {% endfor %}
+# </penguiflow:managed tool-imports>
 
 __all__ = [
+# <penguiflow:managed tool-exports>
 {% for tool in tools %}
     "{{ tool.name }}",
     "{{ tool.class_name }}Args",
     "{{ tool.class_name }}Result",
 {% endfor %}
+# </penguiflow:managed tool-exports>
     "build_catalog_bundle",
 ]
 
@@ -22,12 +26,16 @@ __all__ = [
 def build_catalog_bundle() -> tuple[list[Node], ModelRegistry]:
     """Create the planner catalog and registry."""
     registry = ModelRegistry()
+# <penguiflow:managed tool-registry>
 {% for tool in tools %}
     registry.register("{{ tool.name }}", {{ tool.class_name }}Args, {{ tool.class_name }}Result)
 {% endfor %}
+# </penguiflow:managed tool-registry>
     nodes = [
+# <penguiflow:managed tool-nodes>
 {% for tool in tools %}
         Node({{ tool.name }}, name="{{ tool.name }}"),
 {% endfor %}
+# </penguiflow:managed tool-nodes>
     ]
     return nodes, registry

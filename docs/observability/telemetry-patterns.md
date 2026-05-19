@@ -10,6 +10,8 @@ This page collects **production patterns** for observing PenguiFlow runs, with a
 
 If you only set up one thing: capture `FlowEvent` + correlate by `trace_id`.
 
+Start with **[Observability overview](overview.md)** if you need the full telemetry model across runtime, planner, LLM, and task/session layers.
+
 ## Non-goals / boundaries
 
 - This page does not mandate a telemetry vendor or SDK.
@@ -149,5 +151,6 @@ uv run python examples/roadmap_status_updates/flow.py
 
 ## Troubleshooting checklist
 
+- Need the cross-layer model: see **[Observability overview](overview.md)**.
 - Need log setup: see **[Logging](logging.md)**.
 - Need alert recommendations: see **[Metrics & alerts](metrics-and-alerts.md)**.

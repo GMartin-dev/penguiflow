@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow A2A Integration"
+  short_description: "Expose or call A2A agents end-to-end"
+  default_prompt: "Help me integrate PenguiFlow with A2A. I want to either expose my agent over A2A (HTTP+JSON-RPC, SSE, push notifications, gRPC) or call remote A2A agents from my planner (A2AAgentToolset, AgentRegistry, RouterPolicy). Cover the agent card, conversation continuity via RemoteBinding, and execution modes (blocking/stream/task)."

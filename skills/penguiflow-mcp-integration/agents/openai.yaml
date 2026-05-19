@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow MCP / External Tools"
+  short_description: "Wire MCP/UTCP/HTTP/CLI tools into the planner safely"
+  default_prompt: "Help me wire external tools into PenguiFlow's ReactPlanner via ToolNode. Cover ExternalToolConfig (name/transport/connection), auth modes including OAuth2_USER + HITL pause/resume, env-var substitution, tool_filter allowlists, timeouts/concurrency, MCP resource discovery, and artifact extraction."

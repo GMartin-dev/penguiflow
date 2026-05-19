@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Deployment"
+  short_description: "Production runbook: workers, sizing, distributed"
+  default_prompt: "Help me take a PenguiFlow agent to production. Cover deployment shape (embedded vs queue-worker vs distributed), envelope discipline, sizing (queue_maxsize, NodePolicy.timeout_s, max_retries, deadline_s), worker lifecycle, graceful shutdown, distributed primitives (StateStore, MessageBus, RemoteTransport/RemoteNode), and tool hardening."

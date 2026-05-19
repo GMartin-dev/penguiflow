@@ -2,7 +2,7 @@
 
 > Context for AI coding assistants (Claude Code, Cursor, Copilot, Cody, etc.)
 
-This project uses **PenguiFlow 2.x** for agent scaffolding and orchestration.
+This project uses **PenguiFlow** for agent scaffolding and orchestration.
 
 ---
 
@@ -11,7 +11,15 @@ This project uses **PenguiFlow 2.x** for agent scaffolding and orchestration.
 - **Agent**: {{ agent_name }}
 - **Spec File**: `{{ agent_name }}.yaml`
 - **Package**: `{{ package_name }}`
-- **Template**: Will be set when you run `penguiflow generate`
+- **Template**: Set by the spec when you run `penguiflow generate`
+
+---
+
+## Core Rule
+
+`penguiflow generate` is for first-time bootstrap. Once this project contains implemented tools, custom planner logic, or custom orchestrator logic, use `penguiflow apply` for ongoing spec changes.
+
+Do not rerun scaffolding or `penguiflow generate --force` just to add a tool. That can replace generated planner/config/wiring files.
 
 ---
 
@@ -20,52 +28,58 @@ This project uses **PenguiFlow 2.x** for agent scaffolding and orchestration.
 ### 1. Edit the Spec
 
 The `{{ agent_name }}.yaml` file defines:
+
 - Agent configuration (name, template, flags)
 - LLM settings (provider, model)
 - Tools (functions the agent can call)
 - Flows (optional multi-step pipelines)
 - Planner settings (prompts, limits)
 
-### 2. Generate the Project
+### 2. Bootstrap the Project
+
+Use this only for the first project generation:
 
 ```bash
-# Validate first
 penguiflow generate --spec {{ agent_name }}.yaml --dry-run
-
-# Generate (safe default)
-# - Updates spec-synced files (planner/registry/config/README/etc.)
-# - Creates missing scaffolds (new tools/flows/tests)
-# - Does NOT overwrite existing tool/flow implementations unless you pass --force
 penguiflow generate --spec {{ agent_name }}.yaml
 ```
 
-### 3. Implement Tools
+### 3. Reconcile Existing Projects Safely
 
-Generated tools are stubs. Find them in `src/{{ package_name }}/tools/`.
+After implementation starts, use:
+
+```bash
+penguiflow apply --spec agent.yaml --check --diff
+penguiflow apply --spec agent.yaml
+```
+
+`apply` creates missing tool stubs, creates missing tool tests, updates managed registry/prompt blocks, and refreshes `agent.yaml` for the playground. Existing `src/{{ package_name }}/tools/*.py` implementations are preserved.
 
 ---
 
-## Regeneration Safety (Read This Before Using `--force`)
+## Regeneration Safety
 
-`penguiflow generate` is designed to be incremental: you can keep iterating on the spec and re-run it without losing your implementations.
+Use `--force` only when you explicitly want to overwrite generated wiring files.
 
-Use `--force` only when you explicitly want to overwrite existing files (including tool/flow code you may have edited).
+Before using `--force`:
 
-If you ever need `--force`:
-1. Make sure your work is committed (or at least stashed / copied).
-2. Run `--dry-run` first to see what will be touched.
-3. Prefer deleting a specific file and re-running without `--force` when you only want to refresh one scaffold.
+1. Make sure your work is committed or stashed.
+2. Run `--check --diff` first when using `penguiflow apply`.
+3. Prefer deleting one stale generated file and re-running the safe command when you only need to refresh one scaffold.
 
 ---
 
 ## Key Conventions
 
 ### Tool Names
+
 - Must be `snake_case`: `search_documents`, not `searchDocuments`
 - Avoid Python reserved words
 
 ### Type Annotations
+
 Supported types in spec:
+
 - `str`, `int`, `float`, `bool`
 - `list[T]` (e.g., `list[str]`)
 - `dict[K, V]` (e.g., `dict[str, int]`)
@@ -79,11 +93,9 @@ from penguiflow.planner import ToolContext
 
 @tool(desc="Description shown to LLM", tags=["tag"], side_effects="read")
 async def my_tool(args: MyToolArgs, ctx: ToolContext) -> MyToolResult:
-    # Access context
-    llm_data = ctx.llm_context.get("key")      # Read-only LLM context
-    runtime_data = ctx.tool_context.get("key")  # Mutable runtime context
+    llm_data = ctx.llm_context.get("key")
+    runtime_data = ctx.tool_context.get("key")
 
-    # Implementation
     result = await do_something(args.param)
 
     return MyToolResult(output=result)
@@ -105,7 +117,8 @@ async def my_tool(args: MyToolArgs, ctx: ToolContext) -> MyToolResult:
 
 ### Add a New Tool
 
-1. Add to `{{ agent_name }}.yaml`:
+1. Add to `agent.yaml`:
+
 ```yaml
 tools:
   - name: new_tool
@@ -116,17 +129,23 @@ tools:
       output_field: str
 ```
 
-2. Regenerate: `penguiflow generate --spec {{ agent_name }}.yaml`
+2. Reconcile safely:
 
-3. Implement in `src/{{ package_name }}/tools/new_tool.py`
+```bash
+penguiflow apply --spec agent.yaml --check --diff
+penguiflow apply --spec agent.yaml
+```
 
-**If you later change this tool's `args` / `result` in the spec:**
-- Update `src/{{ package_name }}/tools/new_tool.py` manually to match, or
-- Delete `src/{{ package_name }}/tools/new_tool.py` and re-run generation to re-scaffold it.
+3. Implement `src/{{ package_name }}/tools/new_tool.py`.
+
+4. Update `planner.system_prompt_extra` in `agent.yaml` so the model knows when to use the tool, then run `penguiflow apply --spec agent.yaml` again.
+
+If you later change this tool's `args` / `result` in the spec, update `src/{{ package_name }}/tools/new_tool.py` manually to match, or delete only that tool file and run `penguiflow apply --spec agent.yaml` to re-scaffold it.
 
 ### Add a Flow (Pipeline)
 
-1. Add to `{{ agent_name }}.yaml`:
+1. Add to `agent.yaml`:
+
 ```yaml
 flows:
   - name: my_pipeline
@@ -139,13 +158,20 @@ flows:
     steps: [step_one, step_two]
 ```
 
-2. Regenerate: `penguiflow generate --spec {{ agent_name }}.yaml`
+2. Reconcile:
 
-3. Flow and orchestrator generated in `src/{{ package_name }}/flows/`
+```bash
+penguiflow apply --spec agent.yaml --check --diff
+penguiflow apply --spec agent.yaml
+```
 
 ### Modify System Prompt
 
-Edit `planner.system_prompt_extra` in `{{ agent_name }}.yaml`, then regenerate.
+Edit `planner.system_prompt_extra` in `agent.yaml`, then run:
+
+```bash
+penguiflow apply --spec agent.yaml
+```
 
 ---
 
@@ -153,7 +179,8 @@ Edit `planner.system_prompt_extra` in `{{ agent_name }}.yaml`, then regenerate.
 
 | File | Purpose |
 |------|---------|
-| `{{ agent_name }}.yaml` | Agent specification |
+| `agent.yaml` | Playground-discovered agent specification |
+| `{{ agent_name }}.yaml` | Starter spec produced by `generate --init` |
 | `src/{{ package_name }}/config.py` | Environment config |
 | `src/{{ package_name }}/orchestrator.py` | Main entry point |
 | `src/{{ package_name }}/planner.py` | Tool catalog, prompts |
@@ -166,15 +193,15 @@ Edit `planner.system_prompt_extra` in `{{ agent_name }}.yaml`, then regenerate.
 ## Commands
 
 ```bash
-# Generate from spec
+# First-time bootstrap from starter spec
 penguiflow generate --spec {{ agent_name }}.yaml
 
-# Validate spec without generating
-penguiflow generate --spec {{ agent_name }}.yaml --dry-run
+# Safe reconciliation after implementation starts
+penguiflow apply --spec agent.yaml --check --diff
+penguiflow apply --spec agent.yaml
 
-# Force regenerate (danger: overwrites existing files, including tool/flow implementations)
-# Use only on a clean working tree, or after committing/stashing your changes.
-penguiflow generate --spec {{ agent_name }}.yaml --force
+# Force regenerate generated files (dangerous)
+penguiflow generate --spec agent.yaml --force
 
 # Run the agent
 uv run python -m {{ package_name }} "Your query"
@@ -187,45 +214,62 @@ uv run pytest
 
 ## Generated vs Developer-Owned Files
 
-### Spec-synced (always regenerated; do not edit)
+### Managed Blocks
 
-- `src/{{ package_name }}/planner.py`
-- `src/{{ package_name }}/config.py`
-- `src/{{ package_name }}/tools/__init__.py`
-- `src/{{ package_name }}/flows/__init__.py`
-- `src/{{ package_name }}/*_orchestrator.py` (flow orchestrators, if any)
-- `README.md`
-- `.env.example`
-- `ENV_SETUP.md`
-- `tests/conftest.py`
+PenguiFlow may update marked blocks such as:
 
-### Scaffolds (created when missing; safe to modify)
+- tool imports in `src/{{ package_name }}/tools/__init__.py`
+- registry entries in `src/{{ package_name }}/tools/__init__.py`
+- node list entries in `src/{{ package_name }}/tools/__init__.py`
+- prompt constants in `src/{{ package_name }}/planner.py`
 
-- `src/{{ package_name }}/tools/*.py` (tool implementations)
-- `src/{{ package_name }}/flows/*.py` (flow implementations)
-- `tests/test_tools/test_*.py` and `tests/test_flows/test_*.py`
-- `src/{{ package_name }}/orchestrator.py` (entrypoint wiring)
-- `.env` (your local secrets)
+Managed markers look like:
 
-### Notes
-- If a scaffold exists, it will not be overwritten unless you pass `--force` (or delete the file first).
-- Keep custom code in separate modules and have scaffolds call into them; this makes regeneration safer.
+```python
+# <penguiflow:managed tool-registry>
+registry.register("new_tool", NewToolArgs, NewToolResult)
+# </penguiflow:managed tool-registry>
+```
+
+### Create-Once Files
+
+These are created when missing and safe to modify:
+
+- `src/{{ package_name }}/tools/*.py`
+- `src/{{ package_name }}/flows/*.py`
+- `tests/test_tools/test_*.py`
+- `tests/test_flows/test_*.py`
+- `src/{{ package_name }}/orchestrator.py`
+- `.env`
+
+### Developer-Owned Code
+
+Do not overwrite custom implementation code. Prefer adding helper modules and calling them from tools.
 
 ---
 
 ## Debugging
 
+### Preview Apply
+
+```bash
+penguiflow apply --spec agent.yaml --check --diff
+```
+
 ### Verbose Generation
+
 ```bash
 penguiflow generate --spec {{ agent_name }}.yaml --verbose
 ```
 
 ### Check Generated Code Syntax
+
 ```bash
 python -m py_compile src/{{ package_name }}/tools/*.py
 ```
 
 ### Run Single Tool Test
+
 ```bash
 uv run pytest tests/test_tools/test_my_tool.py -v
 ```

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Runtime Skill Packs"
+  short_description: "Author playbooks the planner retrieves at runtime"
+  default_prompt: "Help me author runtime skill packs for a PenguiFlow ReactPlanner. These are NOT the SKILL.md skill descriptors in the project's skills/ folder — they are curated playbooks the LLM retrieves via skill_search/skill_get/skill_list. Cover SkillsConfig, SkillPackConfig, pack formats (.skill.md/.yaml/.json/.jsonl), applicability gating, runtime SkillProvider, tenant scoping, and skill_propose drafting."

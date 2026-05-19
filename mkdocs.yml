@@ -86,8 +86,10 @@ nav:
   - Planner (ReactPlanner):
       - Overview: planner/overview.md
       - Configuration: planner/configuration.md
+      - Reflection loop: planner/reflection-loop.md
       - Tool discovery & filtering: planner/tool-discovery-and-filtering.md
       - Actions & schema: planner/actions-and-schema.md
+      - Auto-Seq: planner/auto-seq.md
       - Tool design: planner/tool-design.md
       - Guardrails: planner/guardrails.md
       - Parallel & joins: planner/parallel-and-joins.md
@@ -118,6 +120,7 @@ nav:
       - Production deployment: deployment/production-deployment.md
       - Distributed execution: deployment/distributed-execution.md
   - Observability:
+      - Overview: observability/overview.md
       - Logging: observability/logging.md
       - Metrics & alerts: observability/metrics-and-alerts.md
       - Telemetry patterns: observability/telemetry-patterns.md
@@ -127,6 +130,7 @@ nav:
       - "penguiflow dev": cli/dev-command.md
       - "penguiflow init": cli/init-command.md
       - "penguiflow generate": cli/generate-command.md
+      - "penguiflow apply": cli/apply-command.md
       - "penguiflow tools": cli/tools-command.md
   - Reference:
       - Public API surface: reference/public-api.md

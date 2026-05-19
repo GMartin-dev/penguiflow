@@ -272,7 +272,8 @@ class TestEvalCommand:
         result = runner.invoke(app, ["eval", "collect", "--spec", str(spec_file), "--env-file", ".env"])
 
         assert result.exit_code != 0
-        assert "No such option: --env-file" in result.output
+        assert "No such option" in result.output
+        assert "--env-file" in result.output
 
     def test_eval_evaluate_rejects_env_file_option(self, tmp_path: Path) -> None:
         runner = CliRunner()
@@ -282,7 +283,8 @@ class TestEvalCommand:
         result = runner.invoke(app, ["eval", "evaluate", "--spec", str(spec_file), "--env-file", ".env"])
 
         assert result.exit_code != 0
-        assert "No such option: --env-file" in result.output
+        assert "No such option" in result.output
+        assert "--env-file" in result.output
 
     def test_evaluate_invokes_api_with_dataset(self, tmp_path: Path) -> None:
         runner = CliRunner()

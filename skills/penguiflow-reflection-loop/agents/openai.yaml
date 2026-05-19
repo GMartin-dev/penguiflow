@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow Reflection Loop"
+  short_description: "ReactPlanner self-critique setup and debugging"
+  default_prompt: "Use $penguiflow-reflection-loop to explain, configure, and troubleshoot the ReactPlanner reflection loop, including ReflectionConfig wiring, optional reflection_llm, runtime signals, and rollout tradeoffs."

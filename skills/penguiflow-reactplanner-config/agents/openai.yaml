@@ -1,0 +1,4 @@
+interface:
+  display_name: "PenguiFlow ReactPlanner Config"
+  short_description: "ReactPlanner and A2A integration"
+  default_prompt: "Use $penguiflow-reactplanner-config to configure ReactPlanner with native LLM, tool discovery, skills, allowlists, rich output, and router-first A2A integration."

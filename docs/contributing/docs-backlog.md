@@ -28,11 +28,11 @@ It exists to make the “enterprise depth” work measurable:
 
 Counts (current):
 
-- Tier A: 58
+- Tier A: 59
 - Tier B: 12
 - Tier C: 60
 - Shims: 5
-- Total: 135
+- Total: 136
 
 | File | Tier | Area | Outcome | Status | Target phase |
 |---|:---:|---|---|---|---:|
@@ -126,6 +126,7 @@ Counts (current):
 | `docs/migration/upgrade-notes.md` | B | migration | keep | extract | 6 |
 | `docs/observability/logging.md` | A | observability | keep | canonical | 4 |
 | `docs/observability/metrics-and-alerts.md` | A | observability | keep | canonical | 4 |
+| `docs/observability/overview.md` | A | observability | keep | canonical | 4 |
 | `docs/observability/telemetry-patterns.md` | A | observability | keep | canonical | 4 |
 | `docs/patterns/ROUTER_PLAYBOOK_GUIDE.md` | C | patterns | keep | draft | 6 |
 | `docs/patterns/TOOL_VISIBILITY_GUIDE.md` | C | patterns | keep | draft | 6 |
