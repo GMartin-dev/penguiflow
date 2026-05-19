@@ -158,6 +158,21 @@ class SkillQuery(BaseModel):
     search_type: SkillSearchType = "fts"
     top_k: int = Field(default=6, ge=1, le=20)
     task_type: SkillTaskType | None = None
+    tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional AND filter against the skill's declared tags. Empty list "
+            "disables the filter (back-compat default)."
+        ),
+    )
+    namespace: str | None = Field(
+        default=None,
+        description=(
+            "Optional dot-prefix namespace filter. Matches skills whose name "
+            "equals the namespace or starts with '<namespace>.'. None disables "
+            "the filter."
+        ),
+    )
 
 
 class SkillSearchQuery(BaseModel):
@@ -165,6 +180,21 @@ class SkillSearchQuery(BaseModel):
     search_type: SkillSearchType = "fts"
     limit: int = Field(default=8, ge=1, le=20)
     task_type: SkillTaskType | None = None
+    tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional AND filter against the skill's declared tags. Empty list "
+            "disables the filter (back-compat default)."
+        ),
+    )
+    namespace: str | None = Field(
+        default=None,
+        description=(
+            "Optional dot-prefix namespace filter. Matches skills whose name "
+            "equals the namespace or starts with '<namespace>.'. None disables "
+            "the filter."
+        ),
+    )
 
 
 class SkillSearchResult(BaseModel):
@@ -199,6 +229,21 @@ class SkillListRequest(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100)
     task_type: SkillTaskType | None = None
     origin: SkillOrigin | None = None
+    tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional AND filter against the skill's declared tags. Empty list "
+            "disables the filter (back-compat default)."
+        ),
+    )
+    namespace: str | None = Field(
+        default=None,
+        description=(
+            "Optional dot-prefix namespace filter. Matches skills whose name "
+            "equals the namespace or starts with '<namespace>.'. None disables "
+            "the filter."
+        ),
+    )
 
 
 class SkillListEntry(BaseModel):

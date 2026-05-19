@@ -13,6 +13,20 @@ class ToolSearchArgs(BaseModel):
     search_type: Literal["fts", "regex", "exact"] = "fts"
     limit: int = Field(default=8, ge=1, le=20)
     include_always_loaded: bool = False
+    tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional declared-tag AND filter. Each tag must appear in the tool's "
+            "declared tag list. Empty list disables the filter (back-compat default)."
+        ),
+    )
+    namespace: str | None = Field(
+        default=None,
+        description=(
+            "Optional dot-prefix namespace filter. Matches tools whose name equals "
+            "the namespace or starts with '<namespace>.'. None disables the filter."
+        ),
+    )
 
 
 class ToolSearchResult(BaseModel):
@@ -48,6 +62,8 @@ async def tool_search(args: ToolSearchArgs, ctx: Any) -> ToolSearchResponse:
         limit=limit,
         include_always_loaded=bool(args.include_always_loaded),
         allowed_names=set(allowed_names),
+        tags=tuple(args.tags),
+        namespace=args.namespace,
     )
 
     tools = [ToolSearchResult(**item) for item in results]
@@ -65,6 +81,8 @@ async def tool_search(args: ToolSearchArgs, ctx: Any) -> ToolSearchResponse:
                     "requested_search_type": args.search_type,
                     "effective_search_type": effective,
                     "results_count": len(tools),
+                    "tags": list(args.tags),
+                    "namespace": args.namespace,
                 },
             )
         )

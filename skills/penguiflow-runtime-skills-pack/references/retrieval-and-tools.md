@@ -8,9 +8,9 @@ When `SkillsConfig.enabled=True`, the planner gets three tools as always-visible
 
 | Tool | Purpose |
 |---|---|
-| `skill_search(query, limit=...)` | Semantic-style search over skills by `trigger` + `tags`. |
+| `skill_search(query, limit=..., tags=[...], namespace=...)` | Semantic-style search over skills by `trigger` + `tags`. Optional `tags` is an AND filter against the skill's declared tags. Optional `namespace` is a dot-prefix match against the skill name (`name == namespace` or `name.startswith(namespace + ".")`). Empty defaults preserve legacy behavior. |
 | `skill_get(names)` | Fetch full text for one or more skills by name. |
-| `skill_list(...)` | Paginated listing for discovery / directory. |
+| `skill_list(..., tags=[...], namespace=...)` | Paginated listing for discovery / directory. Accepts the same `tags` / `namespace` filters as `skill_search`. |
 
 The planner can call these at any step. They go through tool policy / visibility like any other tool, so a `ToolVisibilityPolicy` can hide them per request (e.g., for A2A specialist responses where the LLM shouldn't browse skills).
 
