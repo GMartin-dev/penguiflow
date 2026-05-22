@@ -18,6 +18,7 @@ from penguiflow.cli.playground_wrapper import AgentWrapper, ChatResult  # noqa: 
 from penguiflow.planner import PlannerEvent  # noqa: E402
 from penguiflow.sessions.models import TaskContextSnapshot, TaskStatus, TaskType  # noqa: E402
 from penguiflow.sessions.projections import PlannerEventProjector  # noqa: E402
+from penguiflow.sessions.session import _json_snapshot_dict  # noqa: E402
 from penguiflow.state.models import StateUpdate, UpdateType  # noqa: E402
 from penguiflow.steering import SteeringInbox  # noqa: E402
 
@@ -100,6 +101,8 @@ class PenguiFlowAdapter(AGUIAdapter):
         self._trace_id = input.run_id
 
         llm_context, tool_context = _extract_forwarded_contexts(input)
+        llm_context_snapshot = _json_snapshot_dict(dict(llm_context))
+        tool_context_snapshot = _json_snapshot_dict(dict(tool_context))
         _LOGGER.info(
             "AG-UI run: messages=%d, thread_id=%s, run_id=%s",
             len(input.messages or []),
@@ -123,7 +126,10 @@ class PenguiFlowAdapter(AGUIAdapter):
         steering: SteeringInbox | None = None
         if self._session_manager is not None and self._session_id is not None and self._task_id is not None:
             session = await self._session_manager.get_or_create(self._session_id)
-            session.update_context(llm_context=dict(llm_context), tool_context=dict(tool_context))
+            session.update_context(
+                llm_context=dict(llm_context_snapshot),
+                tool_context=dict(tool_context_snapshot),
+            )
             if hasattr(session, "set_turn_id"):
                 session.set_turn_id(self._task_id)
             self._configure_session_background(session)
@@ -138,8 +144,8 @@ class PenguiFlowAdapter(AGUIAdapter):
                 task_id=self._task_id,
                 trace_id=self._trace_id,
                 query=query,
-                llm_context=dict(llm_context),
-                tool_context=dict(tool_context),
+                llm_context=dict(llm_context_snapshot),
+                tool_context=dict(tool_context_snapshot),
                 spawn_reason="agui_chat",
             )
             await session.registry.create_task(
@@ -648,7 +654,7 @@ def _extract_text_content(content: Any) -> str:
     text_attr = getattr(content, "text", None)
     if isinstance(text_attr, str):
         return text_attr
-    if isinstance(content, Iterable) and not isinstance(content, (str, bytes, Mapping)):
+    if isinstance(content, Iterable) and not isinstance(content, str | bytes | Mapping):
         parts: list[str] = []
         for item in content:
             if isinstance(item, Mapping):
