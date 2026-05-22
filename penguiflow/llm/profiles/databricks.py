@@ -20,6 +20,66 @@ PROFILES: dict[str, ModelProfile] = {
     # ==========================================================================
     # OpenAI GPT-5 Series on Databricks (January 2026)
     # ==========================================================================
+    "databricks-gpt-5-5-pro": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Deep reasoning for high-stakes workloads
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=400000,
+        max_output_tokens=128000,
+    ),
+    "databricks-gpt-5-5": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Stronger reasoning for complex workloads
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=400000,
+        max_output_tokens=128000,
+    ),
+    "databricks-gpt-5-4-mini": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Cost-optimized multi-step reasoning
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=400000,
+        max_output_tokens=128000,
+    ),
+    "databricks-gpt-5-4-nano": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Lightweight, speed-critical workloads
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=400000,
+        max_output_tokens=128000,
+    ),
     "databricks-gpt-5-2": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=True,
@@ -128,6 +188,21 @@ PROFILES: dict[str, ModelProfile] = {
     # ==========================================================================
     # Anthropic Claude Series on Databricks (January 2026)
     # ==========================================================================
+    "databricks-claude-opus-4-7": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=False,  # Only schema-guided, not json_object
+        supports_tools=True,
+        supports_reasoning=True,  # Supports extended thinking
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=200000,
+        max_output_tokens=64000,
+    ),
     "databricks-claude-opus-4-5": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=False,  # Only schema-guided, not json_object
@@ -222,6 +297,21 @@ PROFILES: dict[str, ModelProfile] = {
     # ==========================================================================
     # Google Gemini Series on Databricks (January 2026)
     # ==========================================================================
+    "databricks-gemini-3-5-flash": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Thinking levels, high-efficiency multimodal
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=1048576,
+        max_output_tokens=65536,
+    ),
     "databricks-gemini-3-flash": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=True,

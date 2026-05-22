@@ -64,12 +64,16 @@ class DatabricksProvider(OpenAICompatibleProvider):
     calling (GA as of 2025).
 
     Available model families (January 2026):
-    - OpenAI GPT-5 series: databricks-gpt-5-2, databricks-gpt-5-1, databricks-gpt-5,
-      databricks-gpt-5-mini, databricks-gpt-5-nano, databricks-gpt-oss-120b, databricks-gpt-oss-20b
-    - Anthropic Claude: databricks-claude-opus-4-5, databricks-claude-sonnet-4-5,
-      databricks-claude-haiku-4-5, databricks-claude-sonnet-4, databricks-claude-opus-4-1
-    - Google Gemini: databricks-gemini-3-flash, databricks-gemini-3-pro,
-      databricks-gemini-2-5-pro, databricks-gemini-2-5-flash, databricks-gemma-3-12b
+    - OpenAI GPT-5 series: databricks-gpt-5-5-pro, databricks-gpt-5-5,
+      databricks-gpt-5-4-mini, databricks-gpt-5-4-nano, databricks-gpt-5-2,
+      databricks-gpt-5-1, databricks-gpt-5, databricks-gpt-5-mini, databricks-gpt-5-nano,
+      databricks-gpt-oss-120b, databricks-gpt-oss-20b
+    - Anthropic Claude: databricks-claude-opus-4-7, databricks-claude-opus-4-5,
+      databricks-claude-sonnet-4-5, databricks-claude-haiku-4-5, databricks-claude-sonnet-4,
+      databricks-claude-opus-4-1
+    - Google Gemini: databricks-gemini-3-5-flash, databricks-gemini-3-flash,
+      databricks-gemini-3-pro, databricks-gemini-2-5-pro, databricks-gemini-2-5-flash,
+      databricks-gemma-3-12b
     - Meta Llama: databricks-llama-4-maverick, databricks-meta-llama-3-3-70b-instruct,
       databricks-meta-llama-3-1-405b-instruct, databricks-meta-llama-3-1-8b-instruct
     - Alibaba Qwen: databricks-qwen3-next-80b-a3b-instruct
