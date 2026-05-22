@@ -245,8 +245,11 @@ accepted for v1.
 ### Wiring
 
 - `create_native_adapter()` gains a `fallback: ModelFallbackConfig | None`
-  argument; when set it returns a `FallbackLLMClient` instead of a bare
-  `NativeLLMAdapter`. (Or a sibling `create_fallback_adapter()`.)
+  argument (Option A — agreed). When `None` it returns a bare
+  `NativeLLMAdapter` (current behavior, untouched); when set it returns a
+  `FallbackLLMClient`. Return type is `JSONLLMClient`, the only contract the
+  planner depends on, so all ~5 construction sites just thread one extra kwarg
+  with no `if/else` branching.
 - `ReactPlanner` / `react_init.py`: new `llm_fallback: ModelFallbackConfig |
   None` parameter. `llm` stays a single string (the primary). Auxiliary client
   construction threads the same `llm_fallback` + shared `CooldownStore`.
@@ -274,4 +277,3 @@ accepted for v1.
 ### Open questions / non-blocking sub-decisions
 
 1. Flat `api_keys` vs per-model keys for mixed-provider chains (see Keys).
-2. Whether `create_native_adapter` gains a `fallback=` arg or a sibling factory.
