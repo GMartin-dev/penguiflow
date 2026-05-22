@@ -240,6 +240,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o4-mini reasoning model (latest small reasoning)
     "o4-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -255,6 +256,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o3 family (advanced reasoning)
     "o3": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -269,6 +271,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o3-pro": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -283,6 +286,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o3-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -298,6 +302,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o1 reasoning models (legacy)
     "o1": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -312,6 +317,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o1-preview": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=False,  # o1-preview doesn't support tools
@@ -326,6 +332,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=32768,
     ),
     "o1-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=False,  # o1-mini doesn't support tools

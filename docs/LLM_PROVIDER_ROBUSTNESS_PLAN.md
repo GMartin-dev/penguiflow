@@ -1,7 +1,9 @@
 # LLM Provider Robustness — Branch Plan
 
 > Branch: `feat/llm-rate-limit-handling`
-> Status: planning — **do not push until items below are implemented + tested**
+> Status: **both work items implemented** — verified locally (ruff, mypy, full
+> test suite green; new `test_llm_temperature.py` + `test_llm_fallback.py`).
+> **Not committed** — pending a live run against Databricks + OpenRouter.
 > Last updated: 2026-05-22
 
 This document accumulates context and the implementation plan for the LLM

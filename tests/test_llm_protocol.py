@@ -605,7 +605,7 @@ class TestCreateNativeAdapter:
                 "nim/qwen/qwen3.5-397b-a17b",
                 api_key="nim-key",
                 base_url="https://integrate.api.nvidia.com/v1",
-                temperature=0.0,
+                temperature=None,
                 json_schema_mode=True,
                 max_retries=3,
                 timeout_s=360.0,

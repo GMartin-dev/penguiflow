@@ -29,6 +29,10 @@ class ModelProfile:
     supports_tools: bool = True  # Tool/function calling
     supports_reasoning: bool = False  # Native reasoning (o1, o3, deepseek-r1)
     supports_streaming: bool = True  # Streaming responses
+    # Whether the model accepts an explicit `temperature` value. False for
+    # models that reject the parameter (e.g. Databricks GPT-5 reasoning models
+    # accept only the default; databricks-claude-opus-4-7 rejects it outright).
+    supports_temperature: bool = True
 
     # Output mode selection
     default_output_mode: Literal["native", "tools", "prompted"] = "native"

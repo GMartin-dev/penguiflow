@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from .errors import LLMError, LLMRateLimitError, is_retryable
+from .errors import LLMError, LLMRateLimitError, is_retryable, is_temperature_error
 from .types import LLMMessage, LLMRequest, TextPart
 
 if TYPE_CHECKING:
@@ -132,6 +132,7 @@ async def call_with_retry(
     build_request: Callable[[list[LLMMessage]], LLMRequest] | None = None,
     profile: Any = None,
     plan: Any = None,
+    temperature: float | None = None,
 ) -> tuple[T, float]:
     """Execute LLM call with automatic retry and cost accounting.
 
@@ -179,6 +180,7 @@ async def call_with_retry(
                     response_model=response_model,
                     profile=profile or provider.profile,
                     plan=plan,
+                    temperature=temperature,
                 )
 
             # Execute request
@@ -255,6 +257,25 @@ async def call_with_retry(
 
         except LLMError as e:
             state.errors.append(e)
+
+            # Temperature compatibility recovery: a model that rejects the
+            # temperature parameter returns a non-retryable 400. Drop temperature
+            # for this model and retry — the provider's next request omits it.
+            if (
+                is_temperature_error(e)
+                and not provider.temperature_unsupported
+                and attempt < config.max_retries
+            ):
+                provider.mark_temperature_unsupported()
+                logger.warning(
+                    "llm_temperature_unsupported_recovered | provider=%s model=%s",
+                    provider.provider_name,
+                    provider.model,
+                )
+                if on_retry:
+                    on_retry(attempt + 1, e)
+                continue
+
             logger.warning(f"LLM error on attempt {attempt + 1}: {e}")
 
             if not config.retry_on_provider_errors or not is_retryable(e) or attempt >= config.max_retries:

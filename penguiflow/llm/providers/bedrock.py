@@ -44,6 +44,7 @@ from ..types import (
     ToolResultPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import Provider
 
 if TYPE_CHECKING:
@@ -372,13 +373,23 @@ class BedrockProvider(Provider):
         messages: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Build Bedrock Converse API parameters from request."""
+        inference_config: dict[str, Any] = {
+            "maxTokens": request.max_tokens or 4096,
+        }
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            inference_config["temperature"] = temp
+
         params: dict[str, Any] = {
             "modelId": self._model,
             "messages": messages,
-            "inferenceConfig": {
-                "maxTokens": request.max_tokens or 4096,
-                "temperature": request.temperature,
-            },
+            "inferenceConfig": inference_config,
         }
 
         if system_content:

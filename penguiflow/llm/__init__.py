@@ -62,6 +62,13 @@ from .errors import (
     map_status_to_error,
 )
 
+# Protocol adapter
+from .fallback import (
+    CooldownStore,
+    FallbackLLMClient,
+    ModelFallbackConfig,
+)
+
 # Pricing
 from .pricing import (
     calculate_cost,
@@ -76,8 +83,6 @@ from .profiles import (
     get_profile,
     register_profile,
 )
-
-# Protocol adapter
 from .protocol import (
     NativeLLMAdapter,
     create_native_adapter,
@@ -223,6 +228,9 @@ __all__ = [
     # Protocol
     "NativeLLMAdapter",
     "create_native_adapter",
+    "CooldownStore",
+    "FallbackLLMClient",
+    "ModelFallbackConfig",
     # Routing
     "ParsedModel",
     "ProviderType",

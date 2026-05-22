@@ -21,6 +21,7 @@ PROFILES: dict[str, ModelProfile] = {
     # OpenAI GPT-5 Series on Databricks (January 2026)
     # ==========================================================================
     "databricks-gpt-5-5-pro": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -36,6 +37,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-5": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -51,6 +53,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-4-mini": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -66,6 +69,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-4-nano": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -81,6 +85,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-2": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -96,6 +101,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-1": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -111,6 +117,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -126,6 +133,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-mini": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -141,6 +149,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-nano": ModelProfile(
+        supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -189,6 +198,7 @@ PROFILES: dict[str, ModelProfile] = {
     # Anthropic Claude Series on Databricks (January 2026)
     # ==========================================================================
     "databricks-claude-opus-4-7": ModelProfile(
+        supports_temperature=False,  # Databricks route rejects the temperature param
         supports_schema_guided_output=True,
         supports_json_only_output=False,  # Only schema-guided, not json_object
         supports_tools=True,

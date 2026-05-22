@@ -46,6 +46,7 @@ from ..types import (
     ToolCallPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import OpenAICompatibleProvider
 
 if TYPE_CHECKING:
@@ -377,8 +378,16 @@ class OpenRouterProvider(OpenAICompatibleProvider):
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._to_openai_messages(request.messages),
-            "temperature": request.temperature,
         }
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            params["temperature"] = temp
 
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens

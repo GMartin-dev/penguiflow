@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from ..artifacts import ArtifactStore, NoOpArtifactStore, discover_artifact_store
 from ..catalog import NodeSpec, ToolLoadingMode, build_catalog
-from ..llm import create_native_adapter
+from ..llm import CooldownStore, ModelFallbackConfig, create_native_adapter
 from ..node import Node
 from ..registry import ModelRegistry
 from ..skills.provider import CompositeSkillProvider, LocalSkillProvider, SkillProvider, SkillProviderFactory
@@ -84,6 +84,7 @@ def init_react_planner(
     llm_max_retries: int = 3,
     use_native_reasoning: bool = True,
     reasoning_effort: str | None = None,
+    llm_fallback: ModelFallbackConfig | None = None,
     absolute_max_parallel: int = 50,
     reflection_config: ReflectionConfig | None = None,
     reflection_llm: str | Mapping[str, Any] | None = None,
@@ -139,6 +140,8 @@ def init_react_planner(
         llm_max_retries: Maximum LLM retry attempts.
         use_native_reasoning: Enable native reasoning for supported models.
         reasoning_effort: Reasoning effort level (e.g., "low", "medium", "high").
+        llm_fallback: Optional ModelFallbackConfig enabling rate-limit fallback
+            across an ordered chain of models (native LLM layer only).
         absolute_max_parallel: Maximum parallel tool executions.
         reflection_config: Configuration for reflection/critique.
         reflection_llm: Separate LLM for reflection.
@@ -573,6 +576,10 @@ def init_react_planner(
         # Custom memory instances are assumed to manage their own isolation semantics.
         planner._memory_singleton = short_term_memory
 
+    # One cooldown store shared by every native client of this run, so a 429
+    # seen by any client (main or auxiliary) protects the others.
+    fallback_store = CooldownStore() if llm_fallback is not None else None
+
     if llm_client is not None:
         planner._client = llm_client
         # When using a custom client, auxiliary clients default to LiteLLM for consistency
@@ -646,6 +653,8 @@ def init_react_planner(
                 streaming_enabled=stream_final_response,
                 use_native_reasoning=use_native_reasoning,
                 reasoning_effort=reasoning_effort,
+                fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
         else:
             planner._client = _LiteLLMJSONClient(
@@ -672,6 +681,8 @@ def init_react_planner(
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
                 timeout_s=llm_timeout_s,
+                fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
         else:
             planner._memory_summarizer_client = _LiteLLMJSONClient(
@@ -691,6 +702,8 @@ def init_react_planner(
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
                 timeout_s=llm_timeout_s,
+                fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
         else:
             planner._summarizer_client = _LiteLLMJSONClient(
@@ -713,6 +726,8 @@ def init_react_planner(
                     json_schema_mode=True,
                     max_retries=llm_max_retries,
                     timeout_s=llm_timeout_s,
+                    fallback=llm_fallback,
+                    cooldown_store=fallback_store,
                 )
             else:
                 planner._reflection_client = _LiteLLMJSONClient(

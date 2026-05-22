@@ -44,6 +44,7 @@ class ToolsOutputStrategy:
         response_model: type[BaseModel],
         profile: ModelProfile,
         plan: SchemaPlan,
+        temperature: float | None = None,
     ) -> LLMRequest:
         """Build a request with forced tool calling.
 
@@ -53,6 +54,7 @@ class ToolsOutputStrategy:
             response_model: Pydantic model for structured output.
             profile: Model profile with capabilities.
             plan: Schema plan with transformed schema.
+            temperature: Optional sampling temperature (opt-in; None omits it).
 
         Returns:
             LLMRequest configured for tool-based structured output.
@@ -71,7 +73,7 @@ class ToolsOutputStrategy:
                 ),
             ),
             tool_choice=self.TOOL_NAME,
-            temperature=0.0,
+            temperature=temperature,
         )
 
     def parse_response(

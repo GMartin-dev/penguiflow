@@ -33,6 +33,7 @@ from ..types import (
     ToolCallPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import OpenAICompatibleProvider
 
 if TYPE_CHECKING:
@@ -254,9 +255,15 @@ class OpenAIProvider(OpenAICompatibleProvider):
             "messages": self._to_openai_messages(request.messages),
         }
 
-        # Temperature (some models don't support it)
-        if not self._profile.supports_reasoning or request.temperature > 0:
-            params["temperature"] = request.temperature
+        # Temperature is opt-in and dropped for models that reject it.
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            params["temperature"] = temp
 
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens

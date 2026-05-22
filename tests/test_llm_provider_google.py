@@ -184,6 +184,8 @@ class TestGoogleProviderBuildConfig:
         from penguiflow.llm.providers.google import GoogleProvider
 
         provider = GoogleProvider.__new__(GoogleProvider)
+        provider._profile = MagicMock()
+        provider._model = "gemini-2.5-flash"
 
         request = LLMRequest(
             model="gemini-2.5-flash",

@@ -13,7 +13,7 @@ import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
 
-from .errors import is_retryable
+from .errors import LLMRateLimitError, is_retryable, is_temperature_error
 from .native_policy import StructuredMode, next_mode, resolve_policy
 from .pricing import calculate_cost, get_pricing
 from .providers import create_provider
@@ -183,13 +183,14 @@ class NativeLLMAdapter:
         *,
         api_key: str | None = None,
         base_url: str | None = None,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_retries: int = 3,
         timeout_s: float = 120.0,
         json_schema_mode: bool = True,
         streaming_enabled: bool = True,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        retry_rate_limit_errors: bool = True,
         **provider_kwargs: Any,
     ) -> None:
         """Initialize the adapter.
@@ -205,6 +206,9 @@ class NativeLLMAdapter:
             streaming_enabled: Enable streaming support.
             use_native_reasoning: Enable native reasoning for supported models.
             reasoning_effort: Reasoning effort level (e.g., "low", "medium", "high").
+            retry_rate_limit_errors: When False, a 429 is raised immediately
+                instead of being retried in-place. Used by ``FallbackLLMClient``
+                so rate limits trigger fast model failover rather than backoff.
             **provider_kwargs: Additional provider-specific configuration.
         """
         self._model = model
@@ -215,6 +219,7 @@ class NativeLLMAdapter:
         self._streaming_enabled = streaming_enabled
         self._use_native_reasoning = use_native_reasoning
         self._reasoning_effort = reasoning_effort
+        self._retry_rate_limit_errors = retry_rate_limit_errors
 
         # Create the underlying provider
         self._provider = create_provider(
@@ -425,8 +430,31 @@ class NativeLLMAdapter:
                         )
                         continue
 
-                # Check if error is retryable (timeout, rate limit, server errors)
-                if is_retryable(e) and attempt < self._max_retries - 1:
+                # Temperature compatibility recovery: a model that rejects the
+                # temperature parameter returns a non-retryable 400. Drop
+                # temperature for this model and retry — the next request omits it.
+                if (
+                    is_temperature_error(e)
+                    and not self._provider.temperature_unsupported
+                    and attempt < self._max_retries - 1
+                ):
+                    self._provider.mark_temperature_unsupported()
+                    logger.warning(
+                        "llm_temperature_unsupported_recovered",
+                        extra={
+                            "provider": self._provider.provider_name,
+                            "model": self._provider.model,
+                        },
+                    )
+                    continue
+
+                # Check if error is retryable (timeout, rate limit, server errors).
+                # Rate limits can be raised immediately so a FallbackLLMClient
+                # fails over to the next model instead of backing off here.
+                retryable = is_retryable(e)
+                if isinstance(e, LLMRateLimitError) and not self._retry_rate_limit_errors:
+                    retryable = False
+                if retryable and attempt < self._max_retries - 1:
                     backoff_s = 2**attempt  # Exponential backoff: 1s, 2s, 4s, ...
                     logger.warning(
                         f"Native LLM adapter error: {e} | provider={self._provider.provider_name}",
@@ -649,16 +677,18 @@ class NativeLLMAdapter:
 def create_native_adapter(
     model: str | Mapping[str, Any],
     *,
-    temperature: float = 0.0,
+    temperature: float | None = None,
     json_schema_mode: bool = True,
     max_retries: int = 3,
     timeout_s: float = 360.0,
     streaming_enabled: bool = True,
     use_native_reasoning: bool = True,
     reasoning_effort: str | None = None,
+    fallback: Any | None = None,
+    cooldown_store: Any | None = None,
     **kwargs: Any,
-) -> NativeLLMAdapter:
-    """Factory function to create a NativeLLMAdapter.
+) -> Any:
+    """Factory function to create a NativeLLMAdapter (or fallback client).
 
     Accepts the same configuration style as the existing _LiteLLMJSONClient
     for easy migration.
@@ -672,10 +702,16 @@ def create_native_adapter(
         streaming_enabled: Enable streaming.
         use_native_reasoning: Enable native reasoning for supported models.
         reasoning_effort: Reasoning effort level (e.g., "low", "medium", "high").
+        fallback: Optional ``ModelFallbackConfig``. When provided, a
+            ``FallbackLLMClient`` is returned instead of a bare adapter so the
+            call fails over to fallback models on rate limits.
+        cooldown_store: Optional shared ``CooldownStore`` (used with ``fallback``
+            so multiple clients in one run share cooldown state).
         **kwargs: Additional provider configuration.
 
     Returns:
-        Configured NativeLLMAdapter instance.
+        A ``NativeLLMAdapter``, or a ``FallbackLLMClient`` when ``fallback`` is set.
+        Both satisfy the ``JSONLLMClient`` protocol.
     """
     if isinstance(model, Mapping):
         # Extract model name from config dict
@@ -690,9 +726,7 @@ def create_native_adapter(
         api_key = kwargs.pop("api_key", None)
         base_url = kwargs.pop("base_url", None)
 
-    return NativeLLMAdapter(
-        model_name,
-        api_key=api_key,
+    adapter_kwargs: dict[str, Any] = dict(
         base_url=base_url,
         temperature=temperature,
         json_schema_mode=json_schema_mode,
@@ -703,6 +737,19 @@ def create_native_adapter(
         reasoning_effort=reasoning_effort,
         **kwargs,
     )
+
+    if fallback is not None:
+        from .fallback import FallbackLLMClient
+
+        return FallbackLLMClient(
+            model_name,
+            fallback,
+            cooldown_store=cooldown_store,
+            default_api_key=api_key,
+            **adapter_kwargs,
+        )
+
+    return NativeLLMAdapter(model_name, api_key=api_key, **adapter_kwargs)
 
 
 __all__ = [

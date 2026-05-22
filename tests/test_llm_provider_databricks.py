@@ -444,6 +444,7 @@ class TestDatabricksProviderBuildParams:
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-claude-sonnet-4-5"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",
@@ -503,6 +504,7 @@ class TestDatabricksProviderBuildParams:
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-gpt-oss-20b"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-gpt-oss-20b",
@@ -519,6 +521,7 @@ class TestDatabricksProviderBuildParams:
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-claude-sonnet-4-5"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",
