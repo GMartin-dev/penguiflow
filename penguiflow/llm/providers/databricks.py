@@ -559,8 +559,22 @@ class DatabricksProvider(OpenAICompatibleProvider):
             if isinstance(reasoning_effort, str) and reasoning_effort:
                 model_id = self._model
 
-                # Claude + Gemini 2.5 use a "thinking" budget (hybrid reasoning).
-                if model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
+                # databricks-claude-opus-4-7 uses adaptive thinking + output_config.effort.
+                if model_id.startswith("databricks-claude-opus-4-7"):
+                    effort = reasoning_effort.strip().lower()
+                    if effort in ("none", "off", "disabled", "false", "0"):
+                        params["thinking"] = {"type": "disabled"}
+                    else:
+                        if "thinking" not in extra and "thinking" not in params:
+                            params["thinking"] = {"type": "adaptive"}
+                        output_config = params.get("output_config")
+                        if not isinstance(output_config, dict):
+                            output_config = {}
+                        output_config.setdefault("effort", effort)
+                        params["output_config"] = output_config
+
+                # Other Databricks Claude models and Gemini 2.5 use a thinking budget.
+                elif model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
                     # Respect an explicit thinking config if the caller provided one.
                     if "thinking" not in extra and "thinking" not in params:
                         effort = reasoning_effort.strip().lower()
@@ -605,7 +619,9 @@ class DatabricksProvider(OpenAICompatibleProvider):
 
         budget_tokens = thinking.get("budget_tokens")
         if not isinstance(budget_tokens, int) or budget_tokens <= 0:
-            params.pop("thinking", None)
+            # Keep non-budgeted thinking modes such as {"type": "adaptive"}.
+            if str(thinking.get("type", "")).strip().lower() == "enabled":
+                params.pop("thinking", None)
             return
 
         max_tokens = params.get("max_tokens")

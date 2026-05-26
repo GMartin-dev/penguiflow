@@ -457,29 +457,50 @@ class TestDatabricksProviderBuildParams:
         assert params["model"] == "databricks-claude-sonnet-4-5"
         assert params["temperature"] == 0.7
 
-    def test_build_params_maps_reasoning_effort_to_thinking_for_claude(self) -> None:
-        """Databricks Claude models use 'thinking' budget_tokens, not reasoning_effort."""
+    def test_build_params_maps_reasoning_effort_to_adaptive_thinking_for_opus_4_7(self) -> None:
+        """Databricks Claude Opus 4.7 uses adaptive thinking + output_config.effort."""
         from penguiflow.llm.providers.databricks import DatabricksProvider
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
-        provider._model = "databricks-claude-sonnet-4-5"
+        provider._model = "databricks-claude-opus-4-7"
         provider._profile = MagicMock()
         provider._profile.max_output_tokens = 64000
 
         request = LLMRequest(
-            model="databricks-claude-sonnet-4-5",
+            model="databricks-claude-opus-4-7",
             messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
             extra={"reasoning_effort": "high"},
         )
 
         params = provider._build_params(request)
         assert "reasoning_effort" not in params
-        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
-        assert isinstance(params["max_tokens"], int)
-        assert params["max_tokens"] > params["thinking"]["budget_tokens"]
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "high"
+        assert "max_tokens" not in params
 
-    def test_build_params_thinking_budget_is_capped_by_max_tokens(self) -> None:
-        """thinking.budget_tokens must be strictly less than max_tokens."""
+    def test_build_params_opus_4_7_adaptive_thinking_keeps_explicit_max_tokens(self) -> None:
+        """Opus 4.7 adaptive thinking should not mutate explicit max_tokens."""
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-4-7"
+        provider._profile = MagicMock()
+        provider._profile.max_output_tokens = 64000
+
+        request = LLMRequest(
+            model="databricks-claude-opus-4-7",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            max_tokens=1024,
+            extra={"reasoning_effort": "high"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "high"
+        assert params["max_tokens"] == 1024
+
+    def test_build_params_non_opus_claude_keeps_budget_thinking(self) -> None:
+        """Non-Opus 4.7 Databricks Claude models keep budget-based thinking."""
         from penguiflow.llm.providers.databricks import DatabricksProvider
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
@@ -490,13 +511,13 @@ class TestDatabricksProviderBuildParams:
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",
             messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
-            max_tokens=1024,
             extra={"reasoning_effort": "high"},
         )
 
         params = provider._build_params(request)
-        assert params["thinking"]["budget_tokens"] == 32768
-        assert params["max_tokens"] == 1024 + 32768
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
+        assert isinstance(params["max_tokens"], int)
+        assert params["max_tokens"] > params["thinking"]["budget_tokens"]
 
     def test_build_params_keeps_reasoning_effort_for_supported_models(self) -> None:
         """GPT OSS/Gemini 3 accept reasoning_effort directly."""
