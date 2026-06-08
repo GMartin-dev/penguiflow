@@ -258,6 +258,8 @@ class LocalSkillStore:
         task_type: SkillTaskType | None,
         scope_clause: str,
         scope_params: Sequence[Any],
+        tags: Sequence[str] = (),
+        namespace: str | None = None,
     ) -> tuple[list[dict[str, Any]], SkillSearchType]:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -265,6 +267,11 @@ class LocalSkillStore:
         effective: SkillSearchType = search_type
         if search_type == "fts" and not self.fts_available:
             effective = "regex" if self._fts_fallback_to_regex else "exact"
+
+        required_tags = _normalise_tag_filter(tags)
+        namespace_filter = namespace.strip() if isinstance(namespace, str) else None
+        if namespace_filter == "":
+            namespace_filter = None
 
         self._ensure_schema()
         with sqlite3.connect(self._db_path) as conn:
@@ -284,6 +291,12 @@ class LocalSkillStore:
                         )
             else:
                 results = _search_regex_exact(conn, cleaned_query, effective, task_type, scope_clause, scope_params)
+
+        if required_tags:
+            results = [item for item in results if _matches_tag_filter(item.get("tags", ()), required_tags)]
+        if namespace_filter is not None:
+            results = [item for item in results if _matches_namespace(item["name"], namespace_filter)]
+
         results = sorted(results, key=lambda item: (-float(item["score"]), len(item["name"]), item["name"]))
         start = max(int(offset), 0)
         end = start + max(int(limit), 1)
@@ -310,6 +323,8 @@ class LocalSkillStore:
         origin: SkillOrigin | None,
         scope_clause: str,
         scope_params: Sequence[Any],
+        tags: Sequence[str] = (),
+        namespace: str | None = None,
     ) -> tuple[list[SkillRecord], int]:
         page = max(int(page), 1)
         page_size = max(int(page_size), 1)
@@ -325,16 +340,41 @@ class LocalSkillStore:
             filters.append("origin = ?")
             params.append(origin)
         where = " AND ".join(filters) if filters else "1=1"
-        limit = page_size
-        offset = (page - 1) * page_size
-        sql = f"SELECT {_SKILL_COLUMNS} FROM skills WHERE {where} ORDER BY name LIMIT ? OFFSET ?"
+
+        required_tags = _normalise_tag_filter(tags)
+        namespace_filter = namespace.strip() if isinstance(namespace, str) else None
+        if namespace_filter == "":
+            namespace_filter = None
+        post_filter = bool(required_tags) or namespace_filter is not None
+
         with sqlite3.connect(self._db_path) as conn:
-            rows = conn.execute(sql, params + [limit, offset]).fetchall()
-            total = conn.execute(
-                f"SELECT COUNT(1) FROM skills WHERE {where}",
-                params,
-            ).fetchone()[0]
-        return [_row_to_skill(row) for row in rows], int(total)
+            if not post_filter:
+                # Fast path: SQL handles paging + COUNT directly.
+                limit = page_size
+                offset = (page - 1) * page_size
+                sql = (
+                    f"SELECT {_SKILL_COLUMNS} FROM skills WHERE {where} "
+                    "ORDER BY name LIMIT ? OFFSET ?"
+                )
+                rows = conn.execute(sql, params + [limit, offset]).fetchall()
+                total = conn.execute(
+                    f"SELECT COUNT(1) FROM skills WHERE {where}",
+                    params,
+                ).fetchone()[0]
+                return [_row_to_skill(row) for row in rows], int(total)
+
+            # Filtered path: load all candidates, apply Python filter, then page.
+            sql = f"SELECT {_SKILL_COLUMNS} FROM skills WHERE {where} ORDER BY name"
+            all_rows = conn.execute(sql, params).fetchall()
+        records = [_row_to_skill(row) for row in all_rows]
+        if required_tags:
+            records = [record for record in records if _matches_tag_filter(record.tags, required_tags)]
+        if namespace_filter is not None:
+            records = [record for record in records if _matches_namespace(record.name, namespace_filter)]
+        total = len(records)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return records[start:end], total
 
     def list_recent(
         self,
@@ -763,6 +803,31 @@ def _fts_or_query(tokens: Sequence[str]) -> str:
     return " OR ".join(f'"{token}"' for token in tokens)
 
 
+def _normalise_tag_filter(tags: Sequence[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or ():
+        text = str(tag).strip()
+        if not text or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+    return cleaned
+
+
+def _matches_tag_filter(declared_tags: Sequence[str], required: Sequence[str]) -> bool:
+    if not required:
+        return True
+    declared = {str(tag) for tag in declared_tags or ()}
+    return all(tag in declared for tag in required)
+
+
+def _matches_namespace(name: str, namespace: str) -> bool:
+    if not namespace:
+        return True
+    return name == namespace or name.startswith(namespace + ".")
+
+
 def _search_regex_exact(
     conn: sqlite3.Connection,
     query: str,
@@ -820,6 +885,7 @@ def _score_exact(query: str, rows: list[tuple[str, str | None, str | None, str, 
                 "title": title,
                 "trigger": trigger,
                 "task_type": task_type_value,
+                "tags": tags,
                 "match_type": "exact",
                 "score": 1.0,
             }
@@ -856,6 +922,7 @@ def _score_regex(query: str, rows: list[tuple[str, str | None, str | None, str, 
                 "title": title,
                 "trigger": trigger,
                 "task_type": task_type_value,
+                "tags": tags,
                 "match_type": "regex",
                 "score": score,
             }

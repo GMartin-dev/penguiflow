@@ -41,6 +41,8 @@ async def skill_list(args: SkillListArgs, ctx: Any) -> SkillListResponse:
                     "filters": {
                         "task_type": args.task_type,
                         "origin": args.origin,
+                        "tags": list(args.tags),
+                        "namespace": args.namespace,
                     },
                     "returned_count": len(response.skills),
                 },

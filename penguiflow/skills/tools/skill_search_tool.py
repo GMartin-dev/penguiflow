@@ -42,6 +42,8 @@ async def skill_search(args: SkillSearchArgs, ctx: Any) -> SkillSearchResponse:
                     "requested_search_type": args.search_type,
                     "effective_search_type": response.search_type,
                     "results_count": len(response.skills),
+                    "tags": list(args.tags),
+                    "namespace": args.namespace,
                 },
             )
         )

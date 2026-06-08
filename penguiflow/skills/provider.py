@@ -417,6 +417,8 @@ class LocalSkillProvider:
         scope_clause: str,
         scope_params: Sequence[object],
         offset: int = 0,
+        tags: Sequence[str] = (),
+        namespace: str | None = None,
     ) -> tuple[list[SkillRecord], SkillSearchType]:
         results, effective = self._store.search(
             query,
@@ -426,6 +428,8 @@ class LocalSkillProvider:
             task_type=task_type,
             scope_clause=scope_clause,
             scope_params=scope_params,
+            tags=tags,
+            namespace=namespace,
         )
         names = [item["name"] for item in results]
         records = self._store.get_by_name(names, scope_clause=scope_clause, scope_params=scope_params)
@@ -441,6 +445,8 @@ class LocalSkillProvider:
         scope_clause: str,
         scope_params: Sequence[object],
         capability_context: SkillCapabilityContext | None,
+        tags: Sequence[str] = (),
+        namespace: str | None = None,
     ) -> tuple[list[SkillRecord], SkillSearchType]:
         batch_size = max(int(target_count), 1)
         offset = 0
@@ -456,6 +462,8 @@ class LocalSkillProvider:
                 task_type=task_type,
                 scope_clause=scope_clause,
                 scope_params=scope_params,
+                tags=tags,
+                namespace=namespace,
             )
             if not records:
                 break
@@ -486,6 +494,8 @@ class LocalSkillProvider:
             scope_clause=scope_clause,
             scope_params=scope_params,
             capability_context=capability_context,
+            tags=tuple(query.tags),
+            namespace=query.namespace,
         )
         disallowed, tool_search_allowed = _tool_redaction_sets(capability_context)
         detailed = [
@@ -522,6 +532,8 @@ class LocalSkillProvider:
         capability_context: SkillCapabilityContext | None = None,
     ) -> SkillSearchResponse:
         scope_clause, scope_params = _build_scope_filter(tool_context)
+        query_tags = tuple(query.tags)
+        query_namespace = query.namespace
         results, effective = self._store.search(
             query.query,
             search_type=query.search_type,
@@ -529,6 +541,8 @@ class LocalSkillProvider:
             task_type=query.task_type,
             scope_clause=scope_clause,
             scope_params=scope_params,
+            tags=query_tags,
+            namespace=query_namespace,
         )
         effective = cast(SkillSearchType, effective)
         if capability_context is not None:
@@ -540,6 +554,8 @@ class LocalSkillProvider:
                 scope_clause=scope_clause,
                 scope_params=scope_params,
                 capability_context=capability_context,
+                tags=query_tags,
+                namespace=query_namespace,
             )
             applicable_names = {record.name for record in applicable_records}
             if applicable_names:
@@ -550,6 +566,8 @@ class LocalSkillProvider:
                     task_type=query.task_type,
                     scope_clause=scope_clause,
                     scope_params=scope_params,
+                    tags=query_tags,
+                    namespace=query_namespace,
                 )
                 filtered_results = [item for item in results if item["name"] in applicable_names]
                 if len(filtered_results) < len(applicable_names):
@@ -563,6 +581,8 @@ class LocalSkillProvider:
                             task_type=query.task_type,
                             scope_clause=scope_clause,
                             scope_params=scope_params,
+                            tags=query_tags,
+                            namespace=query_namespace,
                         )
                         if not batch:
                             break
@@ -636,6 +656,8 @@ class LocalSkillProvider:
         capability_context: SkillCapabilityContext | None = None,
     ) -> SkillListResponse:
         scope_clause, scope_params = _build_scope_filter(tool_context)
+        req_tags = tuple(req.tags)
+        req_namespace = req.namespace
         if capability_context is None:
             records, total = self._store.list(
                 page=req.page,
@@ -644,6 +666,8 @@ class LocalSkillProvider:
                 origin=req.origin,
                 scope_clause=scope_clause,
                 scope_params=scope_params,
+                tags=req_tags,
+                namespace=req_namespace,
             )
             applicable = records
         else:
@@ -654,6 +678,8 @@ class LocalSkillProvider:
                 origin=req.origin,
                 scope_clause=scope_clause,
                 scope_params=scope_params,
+                tags=req_tags,
+                namespace=req_namespace,
             )
             applicable_records = self._applicable_records(all_records, capability_context)
             total = len(applicable_records)

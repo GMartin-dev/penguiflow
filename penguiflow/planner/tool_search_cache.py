@@ -12,7 +12,7 @@ from typing import Any
 
 from ..catalog import NodeSpec, ToolLoadingMode
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SIDE_EFFECT_RANK = {
     "pure": 0,
     "read": 1,
@@ -27,6 +27,7 @@ class _ToolRecord:
     name: str
     description: str
     tags: list[str]
+    declared_tags: list[str]
     side_effects: str
     loading_mode: str
     record_hash: str
@@ -80,10 +81,13 @@ class ToolSearchCache:
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             existing_fingerprint = _get_meta(conn, "catalog_fingerprint")
+            existing_schema_version = _get_meta(conn, "schema_version")
+            schema_outdated = existing_schema_version != str(_SCHEMA_VERSION)
             if (
                 existing_fingerprint == fingerprint
                 and not self._rebuild_cache_on_init
                 and self._enable_incremental_index
+                and not schema_outdated
             ):
                 return
 
@@ -95,7 +99,14 @@ class ToolSearchCache:
                 existing = {row[0]: row[1] for row in conn.execute("SELECT name, record_hash FROM tools")}
                 desired = {record.name: record.record_hash for record in records}
                 to_delete = set(existing) - set(desired)
-                to_upsert = [record for record in records if existing.get(record.name) != record.record_hash]
+                if schema_outdated:
+                    # Force re-upsert so new columns (e.g. declared_tags) get
+                    # populated for every row without disturbing the FTS index.
+                    to_upsert = records
+                else:
+                    to_upsert = [
+                        record for record in records if existing.get(record.name) != record.record_hash
+                    ]
 
             if to_delete:
                 for name in to_delete:
@@ -108,14 +119,16 @@ class ToolSearchCache:
                         name,
                         description,
                         tags,
+                        declared_tags,
                         side_effects,
                         loading_mode,
                         record_hash
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(name) DO UPDATE SET
                         description=excluded.description,
                         tags=excluded.tags,
+                        declared_tags=excluded.declared_tags,
                         side_effects=excluded.side_effects,
                         loading_mode=excluded.loading_mode,
                         record_hash=excluded.record_hash
@@ -125,6 +138,7 @@ class ToolSearchCache:
                             record.name,
                             record.description,
                             json.dumps(record.tags, ensure_ascii=False),
+                            json.dumps(record.declared_tags, ensure_ascii=False),
                             record.side_effects,
                             record.loading_mode,
                             record.record_hash,
@@ -144,6 +158,8 @@ class ToolSearchCache:
         limit: int,
         include_always_loaded: bool,
         allowed_names: set[str] | None = None,
+        tags: Sequence[str] = (),
+        namespace: str | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -154,6 +170,11 @@ class ToolSearchCache:
             effective_search_type = "regex" if self._fts_fallback_to_regex else "exact"
 
         limit = min(max(int(limit), 1), self._max_search_results)
+
+        required_tags = _normalise_tag_filter(tags)
+        namespace_filter = namespace.strip() if isinstance(namespace, str) else None
+        if namespace_filter == "":
+            namespace_filter = None
 
         self._ensure_schema()
         with sqlite3.connect(self._db_path) as conn:
@@ -182,6 +203,11 @@ class ToolSearchCache:
             if include_always_loaded
             or not _is_always_loaded(item["name"], item["loading_mode"], self._always_loaded_patterns)
         ]
+
+        if required_tags:
+            filtered = [item for item in filtered if _matches_tag_filter(item.get("declared_tags", []), required_tags)]
+        if namespace_filter is not None:
+            filtered = [item for item in filtered if _matches_namespace(item["name"], namespace_filter)]
 
         sorted_results = sorted(
             filtered,
@@ -217,12 +243,19 @@ class ToolSearchCache:
                     name TEXT PRIMARY KEY,
                     description TEXT NOT NULL,
                     tags TEXT NOT NULL,
+                    declared_tags TEXT NOT NULL DEFAULT '[]',
                     side_effects TEXT NOT NULL,
                     loading_mode TEXT NOT NULL,
                     record_hash TEXT NOT NULL
                 )
                 """
             )
+            # Schema v2 migration: add declared_tags column on pre-existing databases.
+            try:
+                conn.execute("ALTER TABLE tools ADD COLUMN declared_tags TEXT NOT NULL DEFAULT '[]'")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tool_index_meta (
@@ -293,8 +326,8 @@ class ToolSearchCache:
             allowed_params.extend(sorted(allowed_names))
 
         sql = (
-            "SELECT tools.name, tools.description, tools.tags, tools.side_effects, tools.loading_mode, "
-            "bm25(tools_fts) as rank "
+            "SELECT tools.name, tools.description, tools.tags, tools.declared_tags, "
+            "tools.side_effects, tools.loading_mode, bm25(tools_fts) as rank "
             "FROM tools_fts JOIN tools ON tools_fts.rowid = tools.rowid "
             "WHERE tools_fts MATCH ?" + clause
         )
@@ -321,7 +354,7 @@ class ToolSearchCache:
 
         scored: list[dict[str, Any]] = []
         raw_scores: list[float] = []
-        for name, description, tags, side_effects, loading_mode, raw in rows:
+        for name, description, tags, declared_tags, side_effects, loading_mode, raw in rows:
             raw_value = float(raw) if raw is not None else 0.0
             raw_value = max(raw_value, 0.0)
             score_raw = 1.0 / (1.0 + raw_value)
@@ -331,6 +364,7 @@ class ToolSearchCache:
                     "name": name,
                     "description": description or "",
                     "tags": _parse_tags(tags),
+                    "declared_tags": _parse_tags(declared_tags),
                     "side_effects": side_effects or "pure",
                     "loading_mode": loading_mode or ToolLoadingMode.ALWAYS.value,
                     "match_type": "fts",
@@ -392,7 +426,8 @@ def _tool_record(spec: NodeSpec) -> _ToolRecord:
     loading_mode = spec.loading_mode
     if isinstance(loading_mode, str):
         loading_mode = ToolLoadingMode(loading_mode)
-    tags = list(spec.tags)
+    declared_tags = [str(tag) for tag in spec.tags if str(tag).strip()]
+    tags = list(declared_tags)
     for token in _fts_tokens(spec.name):
         lowered = token.lower()
         if lowered not in tags:
@@ -404,6 +439,7 @@ def _tool_record(spec: NodeSpec) -> _ToolRecord:
         "name": spec.name,
         "description": spec.desc,
         "tags": tags,
+        "declared_tags": declared_tags,
         "side_effects": spec.side_effects,
         "loading_mode": loading_mode.value,
         "examples": spec.examples_payload(),
@@ -413,6 +449,7 @@ def _tool_record(spec: NodeSpec) -> _ToolRecord:
         name=spec.name,
         description=spec.desc,
         tags=tags,
+        declared_tags=declared_tags,
         side_effects=spec.side_effects,
         loading_mode=loading_mode.value,
         record_hash=record_hash,
@@ -450,7 +487,7 @@ def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 def _fetch_tool_rows(
     conn: sqlite3.Connection,
     allowed_names: set[str] | None,
-) -> list[tuple[str, str, str, str, str]]:
+) -> list[tuple[str, str, str, str, str, str]]:
     if allowed_names is not None and not allowed_names:
         return []
     clause = ""
@@ -459,28 +496,33 @@ def _fetch_tool_rows(
         placeholders = ", ".join("?" for _ in allowed_names)
         clause = f" WHERE name IN ({placeholders})"
         params.extend(sorted(allowed_names))
-    sql = f"SELECT name, description, tags, side_effects, loading_mode FROM tools{clause}"
+    sql = (
+        "SELECT name, description, tags, declared_tags, side_effects, loading_mode "
+        f"FROM tools{clause}"
+    )
     return [
         (
             str(name),
             str(description or ""),
             str(tags or "[]"),
+            str(declared_tags or "[]"),
             str(side_effects or "pure"),
             str(loading_mode or ToolLoadingMode.ALWAYS.value),
         )
-        for name, description, tags, side_effects, loading_mode in conn.execute(sql, params)
+        for name, description, tags, declared_tags, side_effects, loading_mode in conn.execute(sql, params)
     ]
 
 
 def _score_exact(
     query: str,
-    rows: list[tuple[str, str, str, str, str]],
+    rows: list[tuple[str, str, str, str, str, str]],
     preferred_namespaces: Sequence[str],
 ) -> list[dict[str, Any]]:
     query_lower = query.lower()
     results: list[dict[str, Any]] = []
-    for name, description, tags_raw, side_effects, loading_mode in rows:
+    for name, description, tags_raw, declared_tags_raw, side_effects, loading_mode in rows:
         tags = _parse_tags(tags_raw)
+        declared_tags = _parse_tags(declared_tags_raw)
         if not _exact_match(query_lower, name, description, tags):
             continue
         results.append(
@@ -488,6 +530,7 @@ def _score_exact(
                 "name": name,
                 "description": description,
                 "tags": tags,
+                "declared_tags": declared_tags,
                 "side_effects": side_effects,
                 "loading_mode": loading_mode,
                 "match_type": "exact",
@@ -501,7 +544,7 @@ def _score_exact(
 
 def _score_regex(
     query: str,
-    rows: list[tuple[str, str, str, str, str]],
+    rows: list[tuple[str, str, str, str, str, str]],
     preferred_namespaces: Sequence[str],
 ) -> list[dict[str, Any]]:
     regex: re.Pattern[str] | None = None
@@ -522,8 +565,9 @@ def _score_regex(
             return []
 
     results: list[dict[str, Any]] = []
-    for name, description, tags_raw, side_effects, loading_mode in rows:
+    for name, description, tags_raw, declared_tags_raw, side_effects, loading_mode in rows:
         tags = _parse_tags(tags_raw)
+        declared_tags = _parse_tags(declared_tags_raw)
         score = _regex_score(regex, name, description, tags)
         if score is None:
             continue
@@ -532,6 +576,7 @@ def _score_regex(
                 "name": name,
                 "description": description,
                 "tags": tags,
+                "declared_tags": declared_tags,
                 "side_effects": side_effects,
                 "loading_mode": loading_mode,
                 "match_type": "regex",
@@ -587,6 +632,31 @@ def _namespace_rank(name: str, preferred: Sequence[str]) -> int:
         return preferred.index(namespace)
     except ValueError:
         return len(preferred) + 1
+
+
+def _normalise_tag_filter(tags: Sequence[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or ():
+        text = str(tag).strip()
+        if not text or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+    return cleaned
+
+
+def _matches_tag_filter(declared_tags: Sequence[str], required: Sequence[str]) -> bool:
+    if not required:
+        return True
+    declared = {str(tag) for tag in declared_tags or ()}
+    return all(tag in declared for tag in required)
+
+
+def _matches_namespace(name: str, namespace: str) -> bool:
+    if not namespace:
+        return True
+    return name == namespace or name.startswith(namespace + ".")
 
 
 def _is_always_loaded(name: str, loading_mode: str, patterns: Sequence[str]) -> bool:

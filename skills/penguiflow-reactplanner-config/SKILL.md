@@ -45,6 +45,16 @@ Always-visible tools (best practice; keep visible and allowed):
 - Common: `finish`
 - Rich output (only if enabled): see [[penguiflow-rich-output]] for the full always-visible set.
 
+Scoping discovery without rewriting the query (optional):
+- `tool_search(args={"query": "send", "tags": ["mail", "write"]})` — AND match against the
+  tool's **declared** tags (auto-expanded name tokens are ignored by this filter).
+- `tool_search(args={"query": "send", "namespace": "microsoft_365"})` — match tools whose
+  name equals the namespace or starts with `<namespace>.`. Dot-prefix only; `_` and `:` are
+  not separators.
+- Filters compose as AND with each other, with the query, and with `task_type` (skills).
+  Empty defaults preserve legacy behavior.
+- `skill_search` accepts the same `tags` / `namespace` args with identical semantics.
+
 ### 4) Enforce allowlists without breaking discovery (ToolPolicy + ToolVisibilityPolicy)
 Use both layers when needed:
 - `ToolPolicy` (planner init): coarse, global allow/deny list and tag requirements.
