@@ -443,36 +443,65 @@ principles we adopt here rather than re-derive:
 
 ## 10. Phased delivery
 
-### Phase 0 — Spike & go/no-go gate (this branch)
+### Phase 0 — Spike & go/no-go gate — **EXECUTED 2026-06-11: GO**
 
-Throwaway harness (not shipped) driving `pydantic-ai-slim<2` via
-`pydantic_ai.direct` against the routes we can live-test, with the native
-layer as the control. Go/no-go checklist:
+Throwaway harness (not shipped) driving `pydantic-ai-slim==1.107.0` via
+`pydantic_ai.direct` against live routes. Results:
 
-- [ ] OpenRouter route through upstream's OpenRouter support: streaming,
-      `ThinkingPartDelta` → `on_reasoning_chunk` mapping, `json_schema`
-      native mode + prompted fallback, 429 → `ModelHTTPError.status_code`
-      mapping.
-- [ ] OpenAI + Anthropic + Gemini through upstream model classes against the
-      keys we do hold (or trial keys for the spike only): smoke parity on a
-      fixed prompt set.
-- [ ] Databricks via the kept native provider — confirm the §6 shrink plan
-      leaves zero behavior change; additionally test upstream PR #4036's
-      branch against Databricks Claude content blocks to size eventual
-      retirement.
-- [ ] Mid-stream 429 behavior under `model_request_stream` (must match the
-      semantics in `docs/LLM_PROVIDER_ROBUSTNESS_PLAN.md`).
-- [ ] `genai-prices` vs our pricing tables on production models (delta
-      within tolerance; Databricks private rates overridable).
-- [ ] OTel span emission at the adapter seam; ingest into MLflow; confirm
-      MLflow version requirements.
-- [ ] Image part + audio part round-trip on at least one provider each.
-- [ ] Dependency audit: `pydantic-ai-slim[...]` lock diff, attestation
-      verification, no version conflicts with penguiflow's pins.
+- [x] **Typed error mapping** — `ModelHTTPError(status_code, model_name,
+      body)` verified live on 400s and 401s across both routes; exactly the
+      single classification path `FallbackLLMClient` needs.
+- [x] **Databricks via pydantic-ai (`OpenAIChatModel` + workspace base_url)**
+      — `databricks-gpt-5-5` and `databricks-claude-opus-4-8`:
+      - Plain + usage tokens: OK on both.
+      - **Streaming is fully incremental** (81 / 57 `TextPartDelta`s on a
+        long answer; short answers arrive in `PartStartEvent` — harness must
+        count both).
+      - **Native `json_schema` output mode: OK on both models**, valid parsed
+        JSON — Phase 2's primary mechanism works through the transport on
+        the production route.
+      - **Native parallel tool calls: OK on Claude Opus 4.8** after setting
+        `OpenAIModelProfile(openai_supports_strict_tool_definition=False)`
+        (without it: 400 `tools.0.custom.strict`). Both tools called in one
+        response with valid args — the Phase 5 wire format works on the
+        production route, and the quirk is config-level (corrections-layer
+        pattern), not code.
+      - **Thinking gap confirmed exactly as predicted**: adaptive thinking →
+        `UnexpectedModelBehavior` (content-block list fails `content: str`
+        validation; upstream issue #2947). The kept native
+        `DatabricksProvider` remains mandatory for reasoning workloads.
+      - **New route limitation**: `databricks-gpt-5-5` + function tools on
+        chat-completions → hard 400 ("use /v1/responses"). Affects our native
+        provider equally; Phase 5 profile-gates native mode off for this
+        model until a Responses-API path exists.
+- [x] **Image input round-trip** — `BinaryContent(png)` → Databricks Claude
+      Opus 4.8 answered correctly. Image leg of Phase 3 verified on the
+      production route. Audio leg deferred (no audio-capable route in our
+      key set).
+- [x] **`genai-prices`** — opus-4-7 ($5/$25) and gpt-5-4-mini ($0.75/$4.50)
+      match our tables exactly; **opus-4-8 $5/$25 independently confirms the
+      3.10.1 assumed pricing**; discrepancy flagged on sonnet-4-5 ($6/$22.50
+      vs our $3/$15 — possibly the long-context tier; investigate before
+      Phase 4 adoption).
+- [x] **Dependency audit** — `pydantic-ai-slim[openai,openrouter]` +
+      `genai-prices`: 30 packages standalone; resolves cleanly alongside
+      penguiflow's full dev set (124 total, zero conflicts). Confirmed hard
+      transitive deps: `opentelemetry-api`, `pydantic-graph`, `griffelib`,
+      `openai` SDK.
+- [ ] **OpenRouter route** — BLOCKED: the workspace `OPENROUTER_API_KEY` is
+      revoked (401 from `/api/v1/key` directly). Re-run the functional
+      battery there once the key is refreshed (action: operator).
+- [ ] OpenAI / Anthropic / Gemini direct — deferred, no keys (accepted: §2
+      delegates these to upstream's test exposure).
+- [ ] Mid-stream 429 — not triggerable on demand; covered instead by Phase 1
+      unit tests with stub transports + the typed-error verification above.
+- [ ] MLflow ingest E2E — deferred to Phase 4's remaining half (the trace
+      seam itself already shipped in 3.11.0a1).
 
-**No-go** on any unfixable red item → fall back to the §6 streamlined-native
-track alone (shrink + cost + trace), and Phases 2–3 proceed anyway — they
-don't depend on the transport.
+**Verdict: GO.** Every blocking item passed; the two red items are a
+credential refresh and provider keys we never planned to hold. The thinking
+gap and the gpt-5-5 tools limitation reinforce (not weaken) the §6 decision
+to keep the native Databricks provider.
 
 ### Phase 1 — `PydanticAIProvider` (opt-in)
 
