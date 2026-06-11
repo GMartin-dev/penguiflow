@@ -667,6 +667,7 @@ class TestCreateNativeAdapter:
                 use_native_reasoning=True,
                 reasoning_effort=None,
                 trace_sink=None,
+                transport=None,
             )
 
     def test_create_with_dict_config(self) -> None:
@@ -688,6 +689,7 @@ class TestCreateNativeAdapter:
                 use_native_reasoning=True,
                 reasoning_effort=None,
                 trace_sink=None,
+                transport=None,
             )
 
     def test_create_with_nim_dict_config(self) -> None:
@@ -712,6 +714,7 @@ class TestCreateNativeAdapter:
                 use_native_reasoning=True,
                 reasoning_effort=None,
                 trace_sink=None,
+                transport=None,
             )
 
     def test_create_with_api_base_alias(self) -> None:

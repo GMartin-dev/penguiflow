@@ -546,6 +546,15 @@ class _LiteLLMJSONClient:
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
     ) -> None:
+        import warnings
+
+        warnings.warn(
+            "The litellm-backed client (use_native_llm=False) is deprecated and will be "
+            "removed in a future release. Use the native LLM layer (default) or "
+            "transport='pydantic-ai' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._llm = llm
         self._temperature = temperature
         self._json_schema_mode = json_schema_mode
