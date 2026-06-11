@@ -256,11 +256,31 @@ still sit on top later), **llm**/CLI-first, **mirascope** (3 providers),
   months of binding stability, attestations, multi-maintainer).
 - **any-llm**: closest philosophical fit (wraps official SDKs, unified errors,
   normalized reasoning deltas, dedicated Databricks provider) — but its
-  Databricks-Claude reasoning support was verified non-functional at source
-  level as of v1.17.0 (capability flag enabled untested; no code path converts
-  Databricks content blocks into `delta.reasoning`). It would silently drop
-  the exact stream our production route depends on. Re-evaluate alongside
-  liter-llm.
+  Databricks-Claude reasoning support is non-functional, **verified live
+  2026-06-11** against our Databricks workspace (v1.17.0, models
+  `databricks-claude-opus-4-7/4-8`, `databricks-gpt-5-5`,
+  `databricks-gpt-5-4-mini`):
+  - `DatabricksProvider` is an empty `BaseOpenAIProvider` subclass with
+    `SUPPORTS_COMPLETION_REASONING = True` flipped on (the flag was enabled
+    untested — upstream PR #556). There is no per-model request translation:
+    the unified `reasoning_effort` param is forwarded verbatim and Databricks
+    Claude rejects it with **400 "reasoning_effort: Extra inputs are not
+    permitted"** (both stream and non-stream). PenguiFlow's provider
+    translates per family (`databricks.py:558–593`); any-llm does not.
+  - Hand-crafting the correct request (`extra_body={"thinking":
+    {"type": "adaptive"}}`) gets past Databricks, but **streaming then
+    crashes inside any-llm's own types**: `ValidationError: 2 validation
+    errors for ChatCompletionChunk — usage.completion_tokens must be int,
+    got None` on Databricks' usage chunk. Hard failure, not silent drop.
+  - Reasoning normalization only reads top-level string fields
+    (`reasoning_content`/`thinking`/`think`/`chain_of_thought`) and
+    `<think>`-style XML tags; Databricks Claude's list-shaped reasoning
+    content blocks (`type: "reasoning"`, `summary[].text` — what
+    `databricks.py:454–463` parses) have no conversion path.
+  - GPT-5 family on Databricks works through any-llm (`reasoning_effort`
+    accepted), with no visible reasoning stream — consistent with the
+    provider hiding reasoning; not a defect.
+  Re-evaluate alongside liter-llm.
 - **openai-SDK consolidation** (official `openai` SDK against compat
   endpoints): maximal supply-chain trust, but the compat layers are leaky
   precisely where we need them — Anthropic's is documented non-production and
@@ -524,3 +544,18 @@ don't depend on the transport.
 6. NIM: served through the transport's OpenAI-compatible path — does any
    production consumer rely on NIM-specific behavior (`reasoning_content`,
    `<think>` tags) that needs a profile correction?
+
+---
+
+## 13. Side finding (live verification 2026-06-11) — pre-existing bug
+
+While verifying any-llm against our Databricks workspace, Databricks rejected
+`thinking={"type": "enabled", "budget_tokens": N}` for
+**`databricks-claude-opus-4-8`** with: *"thinking.type.enabled" is not
+supported for this model. Use "thinking.type.adaptive" and
+"output_config.effort"*. PenguiFlow's own provider routes only
+`databricks-claude-opus-4-7*` to adaptive thinking (`databricks.py:563`);
+Opus 4.8 falls through to the budget branch (`databricks.py:576–584`) and
+would hit the same 400 whenever a caller sets `reasoning_effort`. Fix
+independently of this branch: widen the adaptive-thinking routing (and the
+corresponding profile) to Opus 4.8, with a live regression test.
