@@ -557,10 +557,10 @@ class DatabricksProvider(OpenAICompatibleProvider):
 
             reasoning_effort = extra.pop("reasoning_effort", None)
             if isinstance(reasoning_effort, str) and reasoning_effort:
-                model_id = self._model
+                style = self._resolve_reasoning_request_style()
 
-                # databricks-claude-opus-4-7 uses adaptive thinking + output_config.effort.
-                if model_id.startswith("databricks-claude-opus-4-7"):
+                # Adaptive thinking + output_config.effort (Claude Opus 4.7/4.8).
+                if style == "adaptive_effort":
                     effort = reasoning_effort.strip().lower()
                     if effort in ("none", "off", "disabled", "false", "0"):
                         params["thinking"] = {"type": "disabled"}
@@ -573,8 +573,8 @@ class DatabricksProvider(OpenAICompatibleProvider):
                         output_config.setdefault("effort", effort)
                         params["output_config"] = output_config
 
-                # Other Databricks Claude models and Gemini 2.5 use a thinking budget.
-                elif model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
+                # Thinking budget (older Claude models and Gemini 2.5).
+                elif style == "thinking_budget":
                     # Respect an explicit thinking config if the caller provided one.
                     if "thinking" not in extra and "thinking" not in params:
                         effort = reasoning_effort.strip().lower()
@@ -583,13 +583,9 @@ class DatabricksProvider(OpenAICompatibleProvider):
                             if budget_tokens > 0:
                                 params["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
 
-                # GPT OSS + Gemini 3 accept reasoning_effort directly.
-                elif model_id.startswith("databricks-gpt-oss-") or model_id.startswith("databricks-gemini-3-"):
-                    params["reasoning_effort"] = reasoning_effort
-
-                # GPT-5 family also accepts reasoning_effort, but the allowed values vary;
-                # pass through as-is when supplied.
-                elif model_id.startswith("databricks-gpt-5"):
+                # Direct reasoning_effort passthrough (GPT OSS, Gemini 3, GPT-5
+                # family — allowed values vary per model; pass as-is).
+                elif style == "reasoning_effort":
                     params["reasoning_effort"] = reasoning_effort
 
             params.update(extra)
@@ -668,6 +664,30 @@ class DatabricksProvider(OpenAICompatibleProvider):
                     params.pop("thinking", None)
                     return
                 thinking["budget_tokens"] = budget_tokens
+
+    _REASONING_REQUEST_STYLES = ("adaptive_effort", "thinking_budget", "reasoning_effort")
+
+    def _resolve_reasoning_request_style(self) -> str | None:
+        """Resolve how a reasoning-effort request is expressed for this model.
+
+        The model profile is authoritative (``ModelProfile.reasoning_request_style``);
+        model-name heuristics are the fallback for unprofiled models. Unknown
+        profile values fall back to the heuristics rather than failing.
+        """
+        style = getattr(self._profile, "reasoning_request_style", None)
+        if style in self._REASONING_REQUEST_STYLES:
+            return style
+
+        model_id = self._model
+        # Claude Opus 4.7+ rejects thinking budgets ("thinking.type.enabled is
+        # not supported for this model") in favour of adaptive thinking.
+        if model_id.startswith(("databricks-claude-opus-4-7", "databricks-claude-opus-4-8")):
+            return "adaptive_effort"
+        if model_id.startswith(("databricks-claude-", "databricks-gemini-2-5-")):
+            return "thinking_budget"
+        if model_id.startswith(("databricks-gpt-oss-", "databricks-gemini-3-", "databricks-gpt-5")):
+            return "reasoning_effort"
+        return None
 
     def _thinking_budget_tokens_for_effort(self, effort: str) -> int:
         """Map reasoning effort tiers to Databricks 'thinking' budget_tokens.

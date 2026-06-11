@@ -197,6 +197,23 @@ PROFILES: dict[str, ModelProfile] = {
     # ==========================================================================
     # Anthropic Claude Series on Databricks (January 2026)
     # ==========================================================================
+    "databricks-claude-opus-4-8": ModelProfile(
+        supports_temperature=False,  # Databricks route rejects the temperature param
+        supports_schema_guided_output=True,
+        supports_json_only_output=False,  # Only schema-guided, not json_object
+        supports_tools=True,
+        supports_reasoning=True,  # Adaptive thinking + output_config.effort
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="databricks_constrained_decoding",
+        schema_transformer_name="DatabricksJsonSchemaTransformer",
+        reasoning_request_style="adaptive_effort",
+        strict_mode_default=True,
+        max_tools=MAX_TOOLS,
+        max_schema_keys=MAX_SCHEMA_KEYS,
+        max_context_tokens=200000,
+        max_output_tokens=64000,
+    ),
     "databricks-claude-opus-4-7": ModelProfile(
         supports_temperature=False,  # Databricks route rejects the temperature param
         supports_schema_guided_output=True,
@@ -207,6 +224,7 @@ PROFILES: dict[str, ModelProfile] = {
         default_output_mode="native",
         native_structured_kind="databricks_constrained_decoding",
         schema_transformer_name="DatabricksJsonSchemaTransformer",
+        reasoning_request_style="adaptive_effort",
         strict_mode_default=True,
         max_tools=MAX_TOOLS,
         max_schema_keys=MAX_SCHEMA_KEYS,
