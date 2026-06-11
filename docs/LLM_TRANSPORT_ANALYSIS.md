@@ -422,6 +422,26 @@ principles we adopt here rather than re-derive:
    floor for non-tool-calling models; eligibility is profile-driven
    (`supports_tools`); per-model downgrade to prompted mode inside mixed
    fallback chains. Design detail in §10 Phase 5.
+10. **Route/model gates are profile configuration, not code** *(added after
+    the Phase 0 spike; same pattern as `reasoning_request_style` in 3.10.1)*.
+    The two spike findings become `ModelProfile` fields, each landing with
+    its first consumer (never as dead config):
+    - `preferred_transport: Literal["native", "pydantic-ai"] | None = None`
+      *(consumer: Phase 1 factory)*. Resolution order in
+      `create_native_adapter`: explicit `transport=` kwarg → profile →
+      default. Databricks Claude reasoning models pin `"native"` while the
+      content-block gap (upstream #2947) is open; when upstream fixes it,
+      flipping a model to the transport is a profile edit — or an operator
+      `register_profile()` call — with zero library code changes.
+    - `supports_native_tool_calls: bool = True` *(consumer: Phase 5
+      planner)*. Distinct from `supports_tools` (the model can use tools)
+      — this gates the native *wire format* on the model's route.
+      `databricks-gpt-5-5` sets `False` (chat-completions rejects function
+      tools; Responses API required); native-mode planners downgrade that
+      call to prompted with an event instead of failing.
+    Both are runtime-overridable through the existing `register_profile()`
+    surface, so operators can re-route or un-gate models from their own
+    config without waiting for a penguiflow release.
 
 ---
 
@@ -488,9 +508,13 @@ Throwaway harness (not shipped) driving `pydantic-ai-slim==1.107.0` via
       penguiflow's full dev set (124 total, zero conflicts). Confirmed hard
       transitive deps: `opentelemetry-api`, `pydantic-graph`, `griffelib`,
       `openai` SDK.
-- [ ] **OpenRouter route** — BLOCKED: the workspace `OPENROUTER_API_KEY` is
-      revoked (401 from `/api/v1/key` directly). Re-run the functional
-      battery there once the key is refreshed (action: operator).
+- [x] **OpenRouter route** (re-run 2026-06-11 after key refresh) —
+      `openai/gpt-oss-20b` via `openrouter:` model names: plain response
+      carries a typed `ThinkingPart` (pydantic-ai maps OpenRouter reasoning
+      natively); **streaming yields `ThinkingPartDelta`s** (35 thinking + 117
+      text deltas) — `on_reasoning_chunk` parity verified; native
+      `json_schema` ✓; prompted fallback ✓; native tool calling ✓ (single
+      call on this small model; parallel proven on Databricks Claude).
 - [ ] OpenAI / Anthropic / Gemini direct — deferred, no keys (accepted: §2
       delegates these to upstream's test exposure).
 - [ ] Mid-stream 429 — not triggerable on demand; covered instead by Phase 1
@@ -587,9 +611,10 @@ Wiring:
 
 - Planner opt-in: `ReactPlanner(tool_call_mode="prompted" | "native")`,
   default `"prompted"` (zero behavior change). Eligibility gated by
-  `ModelProfile.supports_tools`; a native-mode planner running a model (or a
-  fallback-chain member) without tool support downgrades that call to
-  prompted mode with an event, never fails.
+  `ModelProfile.supports_tools` AND `supports_native_tool_calls` (Decision
+  10 — route-level gate, e.g. `databricks-gpt-5-5`); a native-mode planner
+  running a model (or a fallback-chain member) that fails either gate
+  downgrades that call to prompted mode with an event, never fails.
 - Adapter surface: additive — a new method on `NativeLLMAdapter` (e.g.
   `complete_with_tools()` returning content + typed tool calls), leaving
   `JSONLLMClient.complete()` untouched per Decision 8. The pydantic-ai
