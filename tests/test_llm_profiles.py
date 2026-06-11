@@ -92,6 +92,60 @@ class TestGetProfileForModel:
             assert profile.thinking_tags == ("<think>", "</think>")
 
 
+class TestNewModelProfiles:
+    """Profiles added for the GPT-5.5, Gemini 3.5, and Claude 4.7 generations."""
+
+    def test_databricks_new_models(self) -> None:
+        """Databricks profiles exist for all newly added model IDs."""
+        expected = {
+            "databricks-gemini-3-5-flash": (1048576, 65536),
+            "databricks-gpt-5-5": (400000, 128000),
+            "databricks-gpt-5-5-pro": (400000, 128000),
+            "databricks-gpt-5-4-mini": (400000, 128000),
+            "databricks-gpt-5-4-nano": (400000, 128000),
+            "databricks-claude-opus-4-7": (200000, 64000),
+        }
+        for model, (ctx, out) in expected.items():
+            profile = get_profile(model)
+            assert profile.max_context_tokens == ctx, model
+            assert profile.max_output_tokens == out, model
+            assert profile.supports_tools is True, model
+            assert profile.supports_reasoning is True, model
+            assert profile.native_structured_kind == "databricks_constrained_decoding"
+
+    def test_general_new_models(self) -> None:
+        """General provider profiles exist for the new flagship models."""
+        for model in ("gpt-5.5", "gpt-5.5-pro", "gemini-3.5-flash", "claude-opus-4-7"):
+            profile = get_profile(model)
+            assert profile.supports_tools is True, model
+            assert profile.supports_reasoning is True, model
+            assert profile.max_context_tokens is not None, model
+
+        assert get_profile("openai/gpt-5.5-pro").max_output_tokens == 128000
+        assert get_profile("google/gemini-3.5-flash").max_context_tokens == 1048576
+        assert get_profile("claude-opus-4-7").max_context_tokens == 1000000
+
+    def test_new_models_have_pricing(self) -> None:
+        """Pricing is registered for the new models (no zero fallback)."""
+        from penguiflow.llm.pricing import get_pricing
+
+        for model in (
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gemini-3.5-flash",
+            "claude-opus-4-7",
+            "databricks-gpt-5-5",
+            "databricks-gpt-5-5-pro",
+            "databricks-gpt-5-4-mini",
+            "databricks-gpt-5-4-nano",
+            "databricks-gemini-3-5-flash",
+            "databricks-claude-opus-4-7",
+        ):
+            input_price, output_price = get_pricing(model)
+            assert input_price > 0, model
+            assert output_price > 0, model
+
+
 class TestRegisterProfile:
     """Test register_profile function."""
 

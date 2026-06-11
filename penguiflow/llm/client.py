@@ -48,7 +48,8 @@ class LLMClientConfig:
     retry_on_parse: bool = True
     retry_on_provider_errors: bool = True
     timeout_s: float = 120.0
-    temperature: float = 0.0
+    # Temperature is opt-in: None means the model uses its provider default.
+    temperature: float | None = None
     force_mode: OutputMode | None = None
     enable_telemetry: bool = True
     enable_cost_tracking: bool = True
@@ -258,6 +259,7 @@ class LLMClient:
                 pricing_fn=calculate_cost if self.config.enable_cost_tracking else None,
                 profile=self._profile,
                 plan=plan,
+                temperature=temperature if temperature is not None else self.config.temperature,
             )
 
             # Build cost object

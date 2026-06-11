@@ -281,6 +281,103 @@ class TestNativeLLMAdapter:
 
             assert request.structured_output is None
 
+    def test_build_request_anthropic_claude_with_reasoning_disables_structured_output(self) -> None:
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_provider = MagicMock()
+            mock_provider.model = "claude-sonnet-4-5"
+            mock_provider.provider_name = "anthropic"
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter(
+                "anthropic/claude-sonnet-4-5",
+                json_schema_mode=True,
+                use_native_reasoning=True,
+                reasoning_effort="medium",
+            )
+            messages = adapter._convert_messages([{"role": "user", "content": "test"}])
+            request = adapter._build_request(
+                messages,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "planner_action",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"next_node": {"type": "string"}},
+                            "required": ["next_node"],
+                        },
+                    },
+                },
+            )
+
+            assert request.structured_output is None
+            assert request.extra == {"reasoning_effort": "medium"}
+
+    def test_build_request_databricks_claude_with_reasoning_disables_structured_output(self) -> None:
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_provider = MagicMock()
+            mock_provider.model = "databricks-claude-sonnet-4-5"
+            mock_provider.provider_name = "databricks"
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter(
+                "databricks/databricks-claude-sonnet-4-5",
+                json_schema_mode=True,
+                use_native_reasoning=True,
+                reasoning_effort="high",
+            )
+            messages = adapter._convert_messages([{"role": "user", "content": "test"}])
+            request = adapter._build_request(
+                messages,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "planner_action",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"next_node": {"type": "string"}},
+                            "required": ["next_node"],
+                        },
+                    },
+                },
+            )
+
+            assert request.structured_output is None
+            assert request.extra == {"reasoning_effort": "high"}
+
+    def test_build_request_anthropic_claude_without_reasoning_keeps_structured_output(self) -> None:
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_provider = MagicMock()
+            mock_provider.model = "claude-sonnet-4-5"
+            mock_provider.provider_name = "anthropic"
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter(
+                "anthropic/claude-sonnet-4-5",
+                json_schema_mode=True,
+                use_native_reasoning=False,
+                reasoning_effort="medium",
+            )
+            messages = adapter._convert_messages([{"role": "user", "content": "test"}])
+            request = adapter._build_request(
+                messages,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "planner_action",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"next_node": {"type": "string"}},
+                            "required": ["next_node"],
+                        },
+                    },
+                },
+            )
+
+            assert request.structured_output is not None
+            assert request.structured_output.name == "planner_action"
+            assert request.extra is None
+
     def test_build_request_nim_structured_keeps_reasoning_effort_by_default(self) -> None:
         with patch("penguiflow.llm.protocol.create_provider") as mock_create:
             mock_provider = MagicMock()
@@ -605,7 +702,7 @@ class TestCreateNativeAdapter:
                 "nim/qwen/qwen3.5-397b-a17b",
                 api_key="nim-key",
                 base_url="https://integrate.api.nvidia.com/v1",
-                temperature=0.0,
+                temperature=None,
                 json_schema_mode=True,
                 max_retries=3,
                 timeout_s=360.0,

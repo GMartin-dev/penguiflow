@@ -47,6 +47,7 @@ from ..types import (
     ToolCallPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import OpenAICompatibleProvider
 
 if TYPE_CHECKING:
@@ -64,12 +65,16 @@ class DatabricksProvider(OpenAICompatibleProvider):
     calling (GA as of 2025).
 
     Available model families (January 2026):
-    - OpenAI GPT-5 series: databricks-gpt-5-2, databricks-gpt-5-1, databricks-gpt-5,
-      databricks-gpt-5-mini, databricks-gpt-5-nano, databricks-gpt-oss-120b, databricks-gpt-oss-20b
-    - Anthropic Claude: databricks-claude-opus-4-5, databricks-claude-sonnet-4-5,
-      databricks-claude-haiku-4-5, databricks-claude-sonnet-4, databricks-claude-opus-4-1
-    - Google Gemini: databricks-gemini-3-flash, databricks-gemini-3-pro,
-      databricks-gemini-2-5-pro, databricks-gemini-2-5-flash, databricks-gemma-3-12b
+    - OpenAI GPT-5 series: databricks-gpt-5-5-pro, databricks-gpt-5-5,
+      databricks-gpt-5-4-mini, databricks-gpt-5-4-nano, databricks-gpt-5-2,
+      databricks-gpt-5-1, databricks-gpt-5, databricks-gpt-5-mini, databricks-gpt-5-nano,
+      databricks-gpt-oss-120b, databricks-gpt-oss-20b
+    - Anthropic Claude: databricks-claude-opus-4-7, databricks-claude-opus-4-5,
+      databricks-claude-sonnet-4-5, databricks-claude-haiku-4-5, databricks-claude-sonnet-4,
+      databricks-claude-opus-4-1
+    - Google Gemini: databricks-gemini-3-5-flash, databricks-gemini-3-flash,
+      databricks-gemini-3-pro, databricks-gemini-2-5-pro, databricks-gemini-2-5-flash,
+      databricks-gemma-3-12b
     - Meta Llama: databricks-llama-4-maverick, databricks-meta-llama-3-3-70b-instruct,
       databricks-meta-llama-3-1-405b-instruct, databricks-meta-llama-3-1-8b-instruct
     - Alibaba Qwen: databricks-qwen3-next-80b-a3b-instruct
@@ -519,8 +524,16 @@ class DatabricksProvider(OpenAICompatibleProvider):
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._to_openai_messages(request.messages),
-            "temperature": request.temperature,
         }
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            params["temperature"] = temp
 
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens
@@ -546,8 +559,22 @@ class DatabricksProvider(OpenAICompatibleProvider):
             if isinstance(reasoning_effort, str) and reasoning_effort:
                 model_id = self._model
 
-                # Claude + Gemini 2.5 use a "thinking" budget (hybrid reasoning).
-                if model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
+                # databricks-claude-opus-4-7 uses adaptive thinking + output_config.effort.
+                if model_id.startswith("databricks-claude-opus-4-7"):
+                    effort = reasoning_effort.strip().lower()
+                    if effort in ("none", "off", "disabled", "false", "0"):
+                        params["thinking"] = {"type": "disabled"}
+                    else:
+                        if "thinking" not in extra and "thinking" not in params:
+                            params["thinking"] = {"type": "adaptive"}
+                        output_config = params.get("output_config")
+                        if not isinstance(output_config, dict):
+                            output_config = {}
+                        output_config.setdefault("effort", effort)
+                        params["output_config"] = output_config
+
+                # Other Databricks Claude models and Gemini 2.5 use a thinking budget.
+                elif model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
                     # Respect an explicit thinking config if the caller provided one.
                     if "thinking" not in extra and "thinking" not in params:
                         effort = reasoning_effort.strip().lower()
@@ -592,7 +619,9 @@ class DatabricksProvider(OpenAICompatibleProvider):
 
         budget_tokens = thinking.get("budget_tokens")
         if not isinstance(budget_tokens, int) or budget_tokens <= 0:
-            params.pop("thinking", None)
+            # Keep non-budgeted thinking modes such as {"type": "adaptive"}.
+            if str(thinking.get("type", "")).strip().lower() == "enabled":
+                params.pop("thinking", None)
             return
 
         max_tokens = params.get("max_tokens")

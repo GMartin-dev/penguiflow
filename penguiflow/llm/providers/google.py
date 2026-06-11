@@ -37,6 +37,7 @@ from ..types import (
     ToolResultPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import Provider
 
 if TYPE_CHECKING:
@@ -285,9 +286,16 @@ class GoogleProvider(Provider):
         """Build Google API GenerateContentConfig from request."""
         from google.genai import types as genai_types
 
-        config: dict[str, Any] = {
-            "temperature": request.temperature,
-        }
+        config: dict[str, Any] = {}
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            config["temperature"] = temp
 
         if request.max_tokens:
             config["max_output_tokens"] = request.max_tokens

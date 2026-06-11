@@ -131,7 +131,10 @@ class LLMRequest:
     tools: tuple[ToolSpec, ...] | list[ToolSpec] | None = None
     tool_choice: str | None = None  # Tool name or None
     structured_output: StructuredOutputSpec | None = None
-    temperature: float = 0.0
+    # Temperature is opt-in: None means "do not send temperature" so the model
+    # uses its provider default. Only set this when a caller explicitly wants a
+    # specific sampling temperature.
+    temperature: float | None = None
     max_tokens: int | None = None
     extra: dict[str, Any] | None = None  # Provider-specific passthrough (sanitized)
 

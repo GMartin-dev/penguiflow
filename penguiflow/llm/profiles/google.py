@@ -11,7 +11,21 @@ from __future__ import annotations
 from . import ModelProfile
 
 PROFILES: dict[str, ModelProfile] = {
-    # Gemini 3.0 family (latest)
+    # Gemini 3.5 family (latest)
+    "gemini-3.5-flash": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,  # Thinking levels: minimal, low, medium, high
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="google_response_schema",
+        schema_transformer_name="GoogleJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_context_tokens=1048576,
+        max_output_tokens=65536,
+    ),
+    # Gemini 3.0 family
     "gemini-3-pro-preview": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=True,

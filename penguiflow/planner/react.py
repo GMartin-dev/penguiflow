@@ -183,6 +183,7 @@ from .validation_repair import (
 )
 
 if TYPE_CHECKING:
+    from ..llm import ModelFallbackConfig
     from ..steering import SteeringInbox
     from .artifact_registry import ArtifactRegistry
     from .constraints import _CostTracker
@@ -443,6 +444,7 @@ class ReactPlanner:
         llm_max_retries: int = 3,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        llm_fallback: ModelFallbackConfig | None = None,
         absolute_max_parallel: int = 50,
         reflection_config: ReflectionConfig | None = None,
         reflection_llm: str | Mapping[str, Any] | None = None,
@@ -507,6 +509,7 @@ class ReactPlanner:
             "llm_max_retries": llm_max_retries,
             "use_native_reasoning": use_native_reasoning,
             "reasoning_effort": reasoning_effort,
+            "llm_fallback": llm_fallback,
             "absolute_max_parallel": absolute_max_parallel,
             "reflection_config": reflection_config,
             "reflection_llm": reflection_llm,
@@ -560,6 +563,7 @@ class ReactPlanner:
             llm_max_retries=llm_max_retries,
             use_native_reasoning=use_native_reasoning,
             reasoning_effort=reasoning_effort,
+            llm_fallback=llm_fallback,
             absolute_max_parallel=absolute_max_parallel,
             reflection_config=reflection_config,
             reflection_llm=reflection_llm,

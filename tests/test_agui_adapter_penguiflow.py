@@ -9,6 +9,9 @@ from ag_ui.core import EventType, RunAgentInput
 from penguiflow.agui_adapter.penguiflow import PenguiFlowAdapter
 from penguiflow.cli.playground_wrapper import AgentWrapper, ChatResult
 from penguiflow.planner import PlannerEvent
+from penguiflow.sessions import InMemorySessionStateStore, SessionManager
+from penguiflow.sessions.task_service import InProcessTaskService
+from penguiflow.state.models import TaskStateModel
 
 
 class FakeAgentWrapper(AgentWrapper):
@@ -494,3 +497,50 @@ async def test_penguiflow_adapter_registers_foreground_task_when_session_manager
     assert wrapper.last_tool_context is not None
     assert wrapper.last_tool_context.get("task_id") == "run-1"
     assert wrapper.last_tool_context.get("is_subagent") is False
+
+
+class JsonRoundTripStateStore(InMemorySessionStateStore):
+    async def save_task(self, state):  # type: ignore[no-untyped-def]
+        TaskStateModel.from_state(state).model_dump(mode="json")
+        await super().save_task(state)
+
+
+@pytest.mark.asyncio
+async def test_penguiflow_adapter_sanitizes_nonserializable_tool_context_for_session_snapshot() -> None:
+    sessions = SessionManager(state_store=JsonRoundTripStateStore())
+    task_service = InProcessTaskService(sessions=sessions, planner_factory=None)
+    wrapper = FakeAgentWrapper([])
+    adapter = PenguiFlowAdapter(wrapper, session_manager=sessions)
+
+    input_payload = RunAgentInput(
+        thread_id="thread-json",
+        run_id="run-json",
+        messages=[{"id": "msg-1", "role": "user", "content": "Hi"}],
+        tools=[],
+        context=[],
+        state={},
+        forwarded_props={
+            "penguiflow": {
+                "llm_context": {"tenant": "acme"},
+                "tool_context": {
+                    "tenant_id": "t1",
+                    "task_service": task_service,
+                    "runtime_object": object(),
+                },
+            }
+        },
+    )
+
+    async for _event in adapter.run(input_payload):
+        pass
+
+    assert wrapper.last_tool_context is not None
+    assert wrapper.last_tool_context.get("task_service") is task_service
+    assert wrapper.last_tool_context.get("runtime_object") is not None
+
+    session = await sessions.get_or_create("thread-json")
+    task = await session.get_task("run-json")
+    assert task is not None
+    assert task.context_snapshot.tool_context["tenant_id"] == "t1"
+    assert "task_service" not in task.context_snapshot.tool_context
+    assert "runtime_object" not in task.context_snapshot.tool_context

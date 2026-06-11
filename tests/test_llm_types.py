@@ -135,7 +135,7 @@ class TestLLMRequest:
             messages=[LLMMessage(role="user", parts=[TextPart(text="hi")])],
         )
         assert request.model == "gpt-4o"
-        assert request.temperature == 0.0
+        assert request.temperature is None  # opt-in: omitted by default
         assert request.tools is None
 
     def test_with_tools(self) -> None:

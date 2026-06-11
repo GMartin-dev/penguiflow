@@ -36,7 +36,7 @@ class TestLLMClientConfig:
         assert config.retry_on_parse is True
         assert config.retry_on_provider_errors is True
         assert config.timeout_s == 120.0
-        assert config.temperature == 0.0
+        assert config.temperature is None  # opt-in: omitted by default
         assert config.force_mode is None
         assert config.enable_telemetry is True
         assert config.enable_cost_tracking is True

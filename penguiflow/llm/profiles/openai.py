@@ -20,6 +20,32 @@ from . import ModelProfile
 
 PROFILES: dict[str, ModelProfile] = {
     # GPT-5 family
+    "gpt-5.5": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="openai_response_format",
+        schema_transformer_name="OpenAIJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_context_tokens=1050000,
+        max_output_tokens=128000,
+    ),
+    "gpt-5.5-pro": ModelProfile(
+        supports_schema_guided_output=True,
+        supports_json_only_output=True,
+        supports_tools=True,
+        supports_reasoning=True,
+        supports_streaming=True,
+        default_output_mode="native",
+        native_structured_kind="openai_response_format",
+        schema_transformer_name="OpenAIJsonSchemaTransformer",
+        strict_mode_default=True,
+        max_context_tokens=1050000,
+        max_output_tokens=128000,
+    ),
     "gpt-5.4": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=True,
@@ -214,6 +240,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o4-mini reasoning model (latest small reasoning)
     "o4-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -229,6 +256,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o3 family (advanced reasoning)
     "o3": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -243,6 +271,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o3-pro": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -257,6 +286,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o3-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -272,6 +302,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     # o1 reasoning models (legacy)
     "o1": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=True,
@@ -286,6 +317,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=100000,
     ),
     "o1-preview": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=False,  # o1-preview doesn't support tools
@@ -300,6 +332,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=32768,
     ),
     "o1-mini": ModelProfile(
+        supports_temperature=False,  # Reasoning model: temperature not supported
         supports_schema_guided_output=True,
         supports_json_only_output=True,
         supports_tools=False,  # o1-mini doesn't support tools

@@ -1030,9 +1030,14 @@ class ToolNode:
         return create_model(f"{name.replace('.', '_')}Result", result=(Any, None))
 
     def _json_type_to_python(self, prop_schema: dict[str, Any]) -> type[Any]:
-        """Map JSON schema type to Python type."""
-        json_type = prop_schema.get("type", "string")
+        """Map a JSON Schema property to a Python type.
 
+        Handles plain scalar types, array item types, JSON Schema union
+        ``type`` lists (e.g. ``["string", "null"]`` for nullable fields), and
+        ``anyOf``/``oneOf`` schemas. Union forms resolve to their first
+        non-null branch, which is sufficient for building a permissive args
+        model (optionality is conveyed via field defaults).
+        """
         simple_mapping: dict[str, type[Any]] = {
             "string": str,
             "integer": int,
@@ -1040,12 +1045,33 @@ class ToolNode:
             "boolean": bool,
         }
 
+        json_type = prop_schema.get("type")
+
+        # No explicit "type": fall back to anyOf/oneOf union branches, then str.
+        if json_type is None:
+            for union_key in ("anyOf", "oneOf"):
+                for branch in prop_schema.get(union_key, []) or []:
+                    if isinstance(branch, dict) and branch.get("type") not in (None, "null"):
+                        return self._json_type_to_python(branch)
+            return str
+
+        # Union type list, e.g. ["string", "null"]: resolve to first non-null member.
+        if isinstance(json_type, list):
+            non_null = [t for t in json_type if t != "null"]
+            if not non_null:
+                return dict[str, Any]
+            resolved = dict(prop_schema)
+            resolved["type"] = non_null[0]
+            return self._json_type_to_python(resolved)
+
         if json_type in simple_mapping:
             return simple_mapping[json_type]
 
         if json_type == "array":
             items = prop_schema.get("items", {})
             items_type = items.get("type")
+            if isinstance(items_type, list):
+                items_type = next((t for t in items_type if t != "null"), None)
             if items_type in simple_mapping:
                 inner_type = simple_mapping[items_type]
                 return cast(type[Any], list[inner_type])  # type: ignore[valid-type]

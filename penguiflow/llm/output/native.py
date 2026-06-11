@@ -42,6 +42,7 @@ class NativeOutputStrategy:
         response_model: type[BaseModel],
         profile: ModelProfile,
         plan: SchemaPlan,
+        temperature: float | None = None,
     ) -> LLMRequest:
         """Build a request with native structured output.
 
@@ -51,17 +52,22 @@ class NativeOutputStrategy:
             response_model: Pydantic model for structured output.
             profile: Model profile with capabilities.
             plan: Schema plan with transformed schema.
+            temperature: Optional sampling temperature (opt-in; None omits it).
 
         Returns:
             LLMRequest configured for native structured output.
         """
         # Anthropic uses tool_use for structured output, not response_format
         if profile.native_structured_kind == "anthropic_tool_use":
-            return self._build_anthropic_request(model, messages, response_model, plan)
+            return self._build_anthropic_request(
+                model, messages, response_model, plan, temperature
+            )
 
         # Bedrock also uses tool use
         if profile.native_structured_kind == "bedrock_tool_use":
-            return self._build_bedrock_request(model, messages, response_model, plan)
+            return self._build_bedrock_request(
+                model, messages, response_model, plan, temperature
+            )
 
         # Standard response_format approach (OpenAI, Databricks, Google, OpenRouter)
         return LLMRequest(
@@ -72,7 +78,7 @@ class NativeOutputStrategy:
                 json_schema=plan.transformed_schema,
                 strict=plan.strict_applied,
             ),
-            temperature=0.0,
+            temperature=temperature,
         )
 
     def _build_anthropic_request(
@@ -81,6 +87,7 @@ class NativeOutputStrategy:
         messages: list[LLMMessage],
         response_model: type[BaseModel],
         plan: SchemaPlan,
+        temperature: float | None = None,
     ) -> LLMRequest:
         """Build request for Anthropic's tool_use structured output."""
         from ..types import ToolSpec
@@ -96,7 +103,7 @@ class NativeOutputStrategy:
                 ),
             ),
             tool_choice=response_model.__name__,
-            temperature=0.0,
+            temperature=temperature,
         )
 
     def _build_bedrock_request(
@@ -105,6 +112,7 @@ class NativeOutputStrategy:
         messages: list[LLMMessage],
         response_model: type[BaseModel],
         plan: SchemaPlan,
+        temperature: float | None = None,
     ) -> LLMRequest:
         """Build request for Bedrock's tool use structured output."""
         from ..types import ToolSpec
@@ -120,7 +128,7 @@ class NativeOutputStrategy:
                 ),
             ),
             tool_choice=response_model.__name__,
-            temperature=0.0,
+            temperature=temperature,
         )
 
     def parse_response(

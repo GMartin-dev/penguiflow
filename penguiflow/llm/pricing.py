@@ -39,6 +39,8 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.4-pro": (0.03, 0.18),  # $30/$180 per 1M tokens
     "gpt-5.4-mini": (0.00075, 0.0045),  # $0.75/$4.50 per 1M tokens
     "gpt-5.4-nano": (0.0002, 0.00125),  # $0.20/$1.25 per 1M tokens
+    "gpt-5.5": (0.005, 0.03),  # $5/$30 per 1M tokens
+    "gpt-5.5-pro": (0.03, 0.18),  # $30/$180 per 1M tokens
     # OpenAI - GPT Series
     "gpt-4o": (0.0025, 0.01),  # $2.50/$10.00 per 1M tokens
     "gpt-4o-mini": (0.00015, 0.0006),  # $0.15/$0.60 per 1M tokens
@@ -62,6 +64,8 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-5": (0.005, 0.025),  # $5/$25 per 1M tokens
     "claude-sonnet-4-5": (0.003, 0.015),  # $3/$15 per 1M tokens
     "claude-haiku-4-5": (0.001, 0.005),  # $1/$5 per 1M tokens
+    # Anthropic - Claude 4.7 Series
+    "claude-opus-4-7": (0.005, 0.025),  # $5/$25 per 1M tokens
     # Anthropic - Claude 4.6 Series
     "claude-opus-4-6": (0.005, 0.025),  # $5/$25 per 1M tokens
     "claude-sonnet-4-6": (0.003, 0.015),  # $3/$15 per 1M tokens
@@ -86,6 +90,7 @@ PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.0-flash-exp": (0.0, 0.0),  # Experimental/Free tier
     "gemini-2.0-flash-thinking": (0.0, 0.0),  # Experimental/Free tier
     # Google - Gemini 3.x Series (OpenRouter catalog, March 2026)
+    "gemini-3.5-flash": (0.0015, 0.009),  # $1.50/$9 per 1M tokens
     "gemini-3-flash-preview": (0.0005, 0.003),  # $0.50/$3 per 1M tokens
     "gemini-3-pro-preview": (0.002, 0.012),  # $2/$12 per 1M tokens
     "gemini-3-pro-image-preview": (0.002, 0.012),  # $2/$12 per 1M tokens
@@ -131,7 +136,13 @@ PRICING: dict[str, tuple[float, float]] = {
     "databricks-claude-sonnet-4-6": (0.003, 0.015),
     "databricks-claude-opus-4-5": (0.005, 0.025),
     "databricks-claude-opus-4-6": (0.005, 0.025),
+    "databricks-claude-opus-4-7": (0.005, 0.025),
     "databricks-claude-haiku-4-5": (0.001, 0.005),
+    "databricks-gemini-3-5-flash": (0.0015, 0.009),
+    "databricks-gpt-5-4-mini": (0.00075, 0.0045),
+    "databricks-gpt-5-4-nano": (0.0002, 0.00125),
+    "databricks-gpt-5-5": (0.005, 0.03),
+    "databricks-gpt-5-5-pro": (0.03, 0.18),
     # DeepSeek
     "deepseek-r1": (0.00056, 0.00168),  # $0.56/$1.68 per 1M tokens
     "deepseek-chat": (0.00089, 0.0011),  # $0.89/$1.10 per 1M tokens (V3)

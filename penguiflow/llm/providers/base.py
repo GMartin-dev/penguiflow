@@ -96,6 +96,23 @@ class Provider(ABC):
             LLMInvalidRequestError: If validation fails.
         """
 
+    @property
+    def temperature_unsupported(self) -> bool:
+        """Whether temperature has been disabled for this model at runtime.
+
+        Set by :meth:`mark_temperature_unsupported` after a provider returns a
+        temperature-related 400, so subsequent requests omit the parameter.
+        """
+        return getattr(self, "_temperature_unsupported", False)
+
+    def mark_temperature_unsupported(self) -> None:
+        """Record that this model rejects the temperature parameter.
+
+        Subsequent ``_build_params`` calls drop ``temperature`` so the same
+        request can be retried successfully without a static profile change.
+        """
+        self._temperature_unsupported = True
+
 
 class OpenAICompatibleProvider(Provider, ABC):
     """Base class for OpenAI-compatible providers.
