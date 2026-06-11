@@ -538,14 +538,24 @@ to keep the native Databricks provider.
 - Tests: provider conformance suite parameterized over `native` and
   `pydantic-ai` stub transports; mid-stream behavior; negative paths.
 
-### Phase 2 — Structured final answers (provider-agnostic)
+### Phase 2 — Structured final answers (provider-agnostic) — **SHIPPED**
 
-- `final_response_model` on `ReactPlanner` per Decision 5; corrective-turn
-  retry bounded by profile (default 1).
-- Streaming: structured mode keeps `_StreamingArgsExtractor` token streaming;
-  validation on the assembled result.
-- Tests: valid/invalid/retry-exhausted; default-off byte-parity with today's
-  output; template stubs unchanged (protocol identical).
+- `ReactPlanner(final_response_model=..., final_response_retries=1)` per
+  Decision 5. Schema injected into the system prompt (and the conditional
+  finish schema on Gemini-family routes); `args["structured"]` validated via
+  `model_validate`; corrective turn re-prompts with errors + schema; on
+  exhaustion the field is stripped (never unvalidated data) with a
+  `payload.warnings` entry + `final_response_structured_degraded` event.
+- Deviation from Decision 5 noted: `FinalPayload.structured` is the
+  **json-mode dict dump** of the validated instance, not the instance —
+  `result.payload` is already a serialized dict on every delivery path
+  (sessions, A2A, AG-UI); carrying instances would break serialization.
+- Streaming unchanged: answer streams first (prompt orders args keys);
+  `structured` validates on the assembled result.
+- Live-verified on Databricks `gpt-5-5` through BOTH transports (identical
+  validated payloads, no repair needed) — and the degradation path verified
+  live via a misconfigured client (repair attempt → degraded event → run
+  completes with warning).
 
 ### Phase 3 — Multimodal inputs (provider-agnostic)
 

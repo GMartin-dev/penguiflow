@@ -344,7 +344,9 @@ def _build_minimal_planner_schema() -> dict[str, Any]:
     return schema
 
 
-def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
+def _build_planner_action_schema_conditional_finish(
+    structured_schema: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """PlannerAction schema with a finish-specific requirement.
 
     Pydantic's `PlannerAction` intentionally excludes `thought` from the JSON
@@ -367,6 +369,13 @@ def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
         "additionalProperties": False,
     }
 
+    finish_args_properties: dict[str, Any] = {"answer": {"type": "string", "minLength": 1}}
+    finish_args_required = ["answer"]
+    if structured_schema is not None:
+        # final_response_model: the structured payload is required on finish.
+        finish_args_properties["structured"] = dict(structured_schema)
+        finish_args_required.append("structured")
+
     conditional: dict[str, Any] = {
         "if": {
             "properties": {"next_node": {"enum": ["final_response"]}},
@@ -376,8 +385,8 @@ def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
             "properties": {
                 "args": {
                     "type": "object",
-                    "properties": {"answer": {"type": "string", "minLength": 1}},
-                    "required": ["answer"],
+                    "properties": finish_args_properties,
+                    "required": finish_args_required,
                 }
             },
             "required": ["args"],
