@@ -167,6 +167,9 @@ from .validation_repair import (
     _attempt_graceful_failure as _attempt_graceful_failure_impl,
 )
 from .validation_repair import (
+    _ensure_structured_final as _ensure_structured_final_impl,
+)
+from .validation_repair import (
     _extract_field_descriptions as _extract_field_descriptions_impl,
 )
 from .validation_repair import (
@@ -373,6 +376,9 @@ class ReactPlanner:
     _specs: list[NodeSpec]
     _state_store: Any | None
     _stream_final_response: bool
+    _final_response_model: type[BaseModel] | None
+    _final_response_retries: int
+    _final_response_schema: dict[str, Any] | None
     _summarizer_client: JSONLLMClient | None
     _system_prompt: str
     _system_prompt_extra: str | None
@@ -450,6 +456,8 @@ class ReactPlanner:
         reflection_llm: str | Mapping[str, Any] | None = None,
         tool_policy: ToolPolicy | None = None,
         stream_final_response: bool = False,
+        final_response_model: type[BaseModel] | None = None,
+        final_response_retries: int = 1,
         short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
         background_tasks: BackgroundTasksConfig | None = None,
         error_recovery: ErrorRecoveryConfig | None = None,
@@ -515,6 +523,8 @@ class ReactPlanner:
             "reflection_llm": reflection_llm,
             "tool_policy": tool_policy,
             "stream_final_response": stream_final_response,
+            "final_response_model": final_response_model,
+            "final_response_retries": final_response_retries,
             "short_term_memory": short_term_memory,
             "background_tasks": background_tasks,
             "error_recovery": error_recovery,
@@ -569,6 +579,8 @@ class ReactPlanner:
             reflection_llm=reflection_llm,
             tool_policy=tool_policy,
             stream_final_response=stream_final_response,
+            final_response_model=final_response_model,
+            final_response_retries=final_response_retries,
             short_term_memory=short_term_memory,
             background_tasks=background_tasks,
             error_recovery=error_recovery,
@@ -1574,6 +1586,29 @@ class ReactPlanner:
             emit_event=self._emit_event,
             time_source=self._time_source,
             system_prompt_extra=self._system_prompt_extra,
+            action_seq=action_seq,
+        )
+
+    async def _ensure_structured_final(
+        self,
+        trajectory: Trajectory,
+        action: PlannerAction,
+        *,
+        action_seq: int,
+    ) -> None:
+        if self._final_response_model is None:
+            return
+        await _ensure_structured_final_impl(
+            trajectory=trajectory,
+            action=action,
+            final_response_model=self._final_response_model,
+            final_response_schema=self._final_response_schema or {},
+            retries=self._final_response_retries,
+            build_messages=self._build_messages,
+            client=self._client,
+            cost_tracker=self._cost_tracker,
+            emit_event=self._emit_event,
+            time_source=self._time_source,
             action_seq=action_seq,
         )
 

@@ -17,6 +17,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   (Databricks rejects the parameter for this model — live-verified).
 
 ### Added
+- **Structured final answers (opt-in)**: `ReactPlanner(final_response_model=MyModel)`
+  makes the planner's final response carry a `structured` payload validated against
+  the supplied Pydantic model. On validation failure a bounded corrective turn
+  (`final_response_retries`, default 1) re-prompts with the validation errors and
+  schema; on exhaustion `payload.structured` is omitted (never unvalidated data),
+  a warning lands in `payload.warnings`, and a
+  `final_response_structured_degraded` event fires. `FinalPayload` gains
+  `structured: dict | None`; `payload["raw_answer"]` and streaming are unchanged
+  (answer streams first, `structured` validates on the assembled result).
+  Default unset → byte-identical behavior. Provider-agnostic — live-verified on
+  Databricks through both the native and pydantic-ai transports.
 - **pydantic-ai transport (opt-in)**: `create_native_adapter(transport="pydantic-ai")`
   (or `NativeLLMAdapter(..., transport=...)`) routes completions through
   pydantic-ai's direct model layer behind the existing `Provider` seam — same

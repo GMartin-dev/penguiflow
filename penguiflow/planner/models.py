@@ -217,6 +217,14 @@ class FinalPayload(BaseModel):
     """Standard structure for planner final answers."""
 
     raw_answer: str = Field(description="Human-readable answer text.")
+    structured: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Schema-validated structured answer. Present only when the planner "
+            "was configured with final_response_model AND the payload validated "
+            "against it (after bounded repair). Never carries unvalidated data."
+        ),
+    )
     artifacts: dict[str, Any] = Field(
         default_factory=dict,
         description="Heavy tool outputs collected during execution.",

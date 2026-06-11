@@ -702,6 +702,7 @@ def build_system_prompt(
     planning_hints: Mapping[str, Any] | None = None,
     current_date: str | None = None,
     tool_examples: ToolExamplesConfig | None = None,
+    structured_final_schema: Mapping[str, Any] | None = None,
 ) -> str:
     """Build comprehensive system prompt for the planner.
 
@@ -869,6 +870,33 @@ Example finish:
   }
 }
 </finishing>""")
+
+    # ─────────────────────────────────────────────────────────────
+    # STRUCTURED FINAL RESPONSE (opt-in via final_response_model)
+    # ─────────────────────────────────────────────────────────────
+    if structured_final_schema is not None:
+        schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
+        prompt_sections.append(f"""<structured_final_response>
+When finishing (next_node "final_response"), args MUST ALSO include a "structured" object that
+validates against this JSON schema EXACTLY (all required fields, correct types, no extra keys
+unless the schema allows them):
+
+{schema_text}
+
+Rules:
+- Emit "answer" FIRST inside args, then "structured" (the answer streams to the user).
+- "answer" remains the human-readable text; "structured" is the machine-readable version.
+- Do not wrap "structured" in markdown or strings - it is a plain JSON object.
+
+Example finish shape:
+{{
+  "next_node": "final_response",
+  "args": {{
+    "answer": "...human readable...",
+    "structured": {{ ...matching the schema above... }}
+  }}
+}}
+</structured_final_response>""")
 
     # ─────────────────────────────────────────────────────────────
     # TOOL USAGE
@@ -1110,6 +1138,25 @@ def render_repair_message(error: str) -> str:
         "Previous response was invalid JSON or schema mismatch: "
         f"{error}. Reply with corrected JSON only. "
         'When finishing, set next_node to "final_response" and include args.answer.'
+    )
+
+
+def render_structured_repair_prompt(
+    *,
+    schema: Mapping[str, Any],
+    error: str,
+    answer: str | None,
+) -> str:
+    """Corrective turn for a final response whose structured payload failed validation."""
+    schema_text = json.dumps(schema, ensure_ascii=False)
+    answer_section = f"\nYour answer text was:\n{answer[:2000]}\n" if answer else ""
+    return (
+        "STRUCTURED OUTPUT INVALID: your final response's \"structured\" payload "
+        f"did not validate against the required schema.\n\nValidation error:\n{error}\n"
+        f"{answer_section}\n"
+        f"Required JSON schema:\n{schema_text}\n\n"
+        "Reply with ONLY a single JSON object that validates against the schema above "
+        "(no wrapper, no markdown, no commentary). It must be consistent with your answer."
     )
 
 

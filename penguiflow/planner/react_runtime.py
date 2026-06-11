@@ -553,6 +553,7 @@ def _apply_visible_catalog(planner: Any, visible_specs: Sequence[NodeSpec]) -> N
         extra=getattr(planner, "_system_prompt_extra", None),
         planning_hints=hints_payload,
         tool_examples=getattr(planner, "_tool_examples_config", None),
+        structured_final_schema=getattr(planner, "_final_response_schema", None),
     )
 
     guardrail_context = getattr(planner, "_guardrail_context", None)
@@ -1267,6 +1268,12 @@ async def _handle_finish_action(
                 "finish_repair_failed",
                 extra={"thought": action.thought},
             )
+
+    # Structured final answers (final_response_model): validate args["structured"]
+    # with a bounded corrective-turn repair; strips the field on exhaustion so
+    # payload.structured never carries unvalidated data.
+    if getattr(planner, "_final_response_model", None) is not None:
+        await planner._ensure_structured_final(trajectory, action, action_seq=action_seq)
 
     candidate_answer = action.args if action.args else last_observation
     if isinstance(candidate_answer, MutableMapping):

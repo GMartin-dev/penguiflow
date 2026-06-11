@@ -90,6 +90,8 @@ def init_react_planner(
     reflection_llm: str | Mapping[str, Any] | None = None,
     tool_policy: ToolPolicy | None = None,
     stream_final_response: bool = False,
+    final_response_model: type[BaseModel] | None = None,
+    final_response_retries: int = 1,
     short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
     background_tasks: BackgroundTasksConfig | None = None,
     error_recovery: ErrorRecoveryConfig | None = None,
@@ -279,6 +281,13 @@ def init_react_planner(
             )
 
     planner._stream_final_response = stream_final_response
+    planner._final_response_model = final_response_model
+    planner._final_response_retries = final_response_retries
+    planner._final_response_schema = None
+    if final_response_model is not None:
+        from .llm import _sanitize_json_schema
+
+        planner._final_response_schema = _sanitize_json_schema(final_response_model.model_json_schema())
     planner._tool_policy = tool_policy
     if tool_policy is not None:
         filtered_specs: list[NodeSpec] = []
@@ -425,6 +434,7 @@ def init_react_planner(
         extra=system_prompt_extra,
         planning_hints=hints_payload,
         tool_examples=tool_examples_config,
+        structured_final_schema=planner._final_response_schema,
     )
     # Store extra for use in repair prompts (voice/personality context)
     planner._system_prompt_extra = system_prompt_extra
@@ -533,7 +543,7 @@ def init_react_planner(
             schema_model_name = str(client_model.get("model", ""))
 
     action_schema_payload = (
-        _build_planner_action_schema_conditional_finish()
+        _build_planner_action_schema_conditional_finish(structured_schema=planner._final_response_schema)
         if _supports_conditional_finish_schema(schema_model_name)
         else _build_minimal_planner_schema()
     )
