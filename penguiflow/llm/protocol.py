@@ -17,6 +17,7 @@ from .errors import LLMRateLimitError, is_retryable, is_temperature_error
 from .native_policy import StructuredMode, next_mode, resolve_policy
 from .pricing import calculate_cost, get_pricing
 from .providers import create_provider
+from .tracing import LLMCallSpan, LLMTraceSink, resolve_trace_sink_from_env
 from .types import (
     LLMMessage,
     LLMRequest,
@@ -191,6 +192,7 @@ class NativeLLMAdapter:
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
         retry_rate_limit_errors: bool = True,
+        trace_sink: LLMTraceSink | None = None,
         **provider_kwargs: Any,
     ) -> None:
         """Initialize the adapter.
@@ -209,6 +211,10 @@ class NativeLLMAdapter:
             retry_rate_limit_errors: When False, a 429 is raised immediately
                 instead of being retried in-place. Used by ``FallbackLLMClient``
                 so rate limits trigger fast model failover rather than backoff.
+            trace_sink: Optional ``LLMTraceSink`` receiving one span per
+                ``complete()`` call. When omitted, the sink is resolved from
+                the ``PENGUIFLOW_LLM_TRACING`` env var (``mlflow`` or ``log``)
+                so tracing can be enabled without code changes.
             **provider_kwargs: Additional provider-specific configuration.
         """
         self._model = model
@@ -220,6 +226,7 @@ class NativeLLMAdapter:
         self._use_native_reasoning = use_native_reasoning
         self._reasoning_effort = reasoning_effort
         self._retry_rate_limit_errors = retry_rate_limit_errors
+        self._trace_sink = trace_sink if trace_sink is not None else resolve_trace_sink_from_env()
 
         # Create the underlying provider
         self._provider = create_provider(
@@ -250,6 +257,44 @@ class NativeLLMAdapter:
         Returns:
             Tuple of (content, cost) matching JSONLLMClient protocol.
         """
+        if self._trace_sink is None:
+            return await self._complete_inner(
+                messages=messages,
+                response_format=response_format,
+                stream=stream,
+                on_stream_chunk=on_stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+            )
+
+        call = LLMCallSpan(
+            provider=self._provider.provider_name,
+            model=self._provider.model,
+            stream=stream,
+            response_format_kind=_requested_mode(response_format),
+        )
+        with self._trace_sink.span(call):
+            content, cost = await self._complete_inner(
+                messages=messages,
+                response_format=response_format,
+                stream=stream,
+                on_stream_chunk=on_stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+                _trace_call=call,
+            )
+            call.content_chars = len(content)
+            call.cost_usd = cost
+            return content, cost
+
+    async def _complete_inner(
+        self,
+        *,
+        messages: Sequence[Mapping[str, str]],
+        response_format: Mapping[str, Any] | None = None,
+        stream: bool = False,
+        on_stream_chunk: Callable[[str, bool], None] | None = None,
+        on_reasoning_chunk: Callable[[str, bool], None] | None = None,
+        _trace_call: LLMCallSpan | None = None,
+    ) -> tuple[str, float]:
         # Convert dict messages to LLMMessage format
         llm_messages = _prepare_messages_for_provider(
             provider_name=self._provider.provider_name,
@@ -292,6 +337,8 @@ class NativeLLMAdapter:
         # Execute request with retry logic
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
+            if _trace_call is not None:
+                _trace_call.attempts = attempt + 1
             try:
                 response = await self._provider.complete(
                     request,
@@ -355,6 +402,10 @@ class NativeLLMAdapter:
                         input_tokens,
                         output_tokens,
                     )
+
+                    if _trace_call is not None:
+                        _trace_call.input_tokens = input_tokens
+                        _trace_call.output_tokens = output_tokens
 
                 # If we streamed, finalize callbacks and optionally backfill reasoning.
                 if streaming_active:
@@ -686,6 +737,7 @@ def create_native_adapter(
     reasoning_effort: str | None = None,
     fallback: Any | None = None,
     cooldown_store: Any | None = None,
+    trace_sink: LLMTraceSink | None = None,
     **kwargs: Any,
 ) -> Any:
     """Factory function to create a NativeLLMAdapter (or fallback client).
@@ -707,6 +759,10 @@ def create_native_adapter(
             call fails over to fallback models on rate limits.
         cooldown_store: Optional shared ``CooldownStore`` (used with ``fallback``
             so multiple clients in one run share cooldown state).
+        trace_sink: Optional ``LLMTraceSink`` receiving one span per LLM call.
+            Defaults to env-var resolution (``PENGUIFLOW_LLM_TRACING``); with
+            ``fallback`` set, every per-model adapter shares the same sink so
+            failover is visible per model actually called.
         **kwargs: Additional provider configuration.
 
     Returns:
@@ -735,6 +791,7 @@ def create_native_adapter(
         streaming_enabled=streaming_enabled,
         use_native_reasoning=use_native_reasoning,
         reasoning_effort=reasoning_effort,
+        trace_sink=trace_sink,
         **kwargs,
     )
 

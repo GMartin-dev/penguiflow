@@ -7,7 +7,26 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## Unreleased
 
+### Fixed
+- Databricks Claude Opus 4.8 reasoning: requests with `reasoning_effort` sent a
+  thinking budget that Databricks rejects with 400 ("thinking.type.enabled is not
+  supported"). Reasoning request shaping is now profile metadata
+  (`ModelProfile.reasoning_request_style`) with model-name heuristics as fallback;
+  the new `databricks-claude-opus-4-8` profile routes to adaptive thinking +
+  `output_config.effort` (live-verified) and marks temperature unsupported
+  (Databricks rejects the parameter for this model — live-verified).
+
 ### Added
+- LLM call auto-tracing: every `NativeLLMAdapter.complete()` (and therefore every
+  `FallbackLLMClient` adapter, with spans attributed to the model actually called)
+  can emit one span per LLM call to a pluggable `LLMTraceSink`. Ships with
+  `MlflowLLMTraceSink` (MLflow Tracing spans, `span_type="LLM"`, lazy import,
+  degrades to no-op when mlflow is absent) and `LoggingLLMTraceSink`. Enable
+  explicitly via `create_native_adapter(trace_sink=...)` or transparently with
+  `PENGUIFLOW_LLM_TRACING=mlflow` (or `log`) — no agent code changes, no message
+  contents captured, default behavior unchanged when unset. The seam sits above
+  the `Provider` abstraction, so future transports are traced identically.
+- `databricks-claude-opus-4-8` model profile and pricing entries.
 - Model profiles for GPT-5.5 / GPT-5.5 Pro, Gemini 3.5 Flash, and Claude Opus 4.7,
   plus their Databricks variants (`databricks-gpt-5-5`, `databricks-gpt-5-5-pro`,
   `databricks-gpt-5-4-mini`, `databricks-gpt-5-4-nano`, `databricks-gemini-3-5-flash`,

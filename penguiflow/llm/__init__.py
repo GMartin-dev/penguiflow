@@ -143,6 +143,16 @@ from .telemetry import (
     set_telemetry_hooks,
 )
 
+# Tracing
+from .tracing import (
+    TRACING_ENV_VAR,
+    LLMCallSpan,
+    LLMTraceSink,
+    LoggingLLMTraceSink,
+    MlflowLLMTraceSink,
+    resolve_trace_sink_from_env,
+)
+
 # Core types
 from .types import (
     CancelToken,
@@ -261,4 +271,11 @@ __all__ = [
     "RetryState",
     "ValidationRetry",
     "call_with_retry",
+    # Tracing
+    "TRACING_ENV_VAR",
+    "LLMCallSpan",
+    "LLMTraceSink",
+    "LoggingLLMTraceSink",
+    "MlflowLLMTraceSink",
+    "resolve_trace_sink_from_env",
 ]
