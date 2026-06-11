@@ -1,16 +1,17 @@
-# LLM Transport Consolidation — Analysis & Branch Plan
+# LLM Transport Consolidation — Analysis & Branch Plan (3.11 line)
 
-> Branch: `feat/liter-llm-client-analysis`
-> Status: **analysis only** — no implementation yet. This document is the
-> doc-first artifact for the migration; implementation phases start only after
-> the Phase 0 spike gate passes.
-> Supersedes: the initial liter-llm-only analysis (this file's first revision).
+> Branch: `release/3.11` (integration branch; feature branches PR into it)
+> Status: revision 3. Phase 0 spike pending; the tracing half of Phase 4
+> landed in `3.11.0a1` (`penguiflow/llm/tracing.py`). Revision 3 pulls the
+> native tool-calling planner mode into scope as Phase 5 (was "future").
+> Supersedes: the initial liter-llm-only analysis (revision 1) and the
+> tool-calling-out-of-scope plan (revision 2).
 > Last updated: 2026-06-11
 
 This document analyzes consolidating PenguiFlow's LLM transport — today a
 hand-maintained native provider layer (7 providers) plus a legacy `litellm`
-path — onto a battle-tested third-party client, and bundling three capability
-upgrades into the same effort:
+path — onto a battle-tested third-party client, and bundling four capability
+upgrades into the same effort (the 3.11 release train):
 
 1. **Multimodal inputs** — image (and later audio) content parts reaching the
    model.
@@ -19,6 +20,10 @@ upgrades into the same effort:
 3. **Structured final answers** — the planner's final response validated
    against a developer-supplied Pydantic model instead of prompt-trusted
    formatting.
+4. **Native tool-calling planner mode** *(revision 3)* — an opt-in planner
+   mode where tool intent travels as provider-native tool calls instead of
+   the prompted `{next_node, args}` JSON envelope. Replaces the wire format,
+   not the decision shape — see §10 Phase 5.
 
 **Hard constraint: zero breaking changes.** PenguiFlow is in production. An
 agent that upgrades the library must behave identically or better with no code
@@ -361,8 +366,13 @@ principles we adopt here rather than re-derive:
    not client methods.
 6. **Prompt-engineered and native tool calling can coexist** behind a planner
    opt-in, because both reduce to the same decision shape (`PlannerAction`).
-   Native tool calling is explicitly **out of scope** for this branch but the
-   provider seam should not preclude it.
+   The runtime machinery that executes decisions — parallel fanout, join
+   injection, trajectory, events, pause/resume — is invariant to where the
+   decision came from; only the extraction layer differs. Native tool calling
+   is the right long-term shape for tool-calling-capable models
+   (provider-validated args, clean content channel, native parallel calls);
+   prompted JSON is the permanent compatibility floor for models without
+   tool-calling fine-tunes. *(Revision 3 pulls this in as §10 Phase 5.)*
 
 ---
 
@@ -404,14 +414,22 @@ principles we adopt here rather than re-derive:
    spans at the adapter seam through existing hooks.
 8. **`JSONLLMClient` frozen** except the widening in (6) and formally adding
    the already-shipped `on_reasoning_chunk` as an optional kwarg.
-9. **Native tool calling: out of scope, not precluded.**
+9. **Native tool calling: in scope as an opt-in planner mode** *(revision 3 —
+   was "out of scope, not precluded")*. Binding constraint: it replaces the
+   **wire format**, never the **decision shape**. Provider tool calls are
+   mapped into the same `PlannerAction` the runtime already executes; the
+   prompted mode remains the default until the parity gate and the permanent
+   floor for non-tool-calling models; eligibility is profile-driven
+   (`supports_tools`); per-model downgrade to prompted mode inside mixed
+   fallback chains. Design detail in §10 Phase 5.
 
 ---
 
 ## 9. Non-goals
 
-- Replacing the planner's structured-output-as-intent loop with native tool
-  calling (future branch).
+- **Removing** the prompted (structured-output-as-intent) planner mode.
+  Native tool calling is an opt-in second mode; prompted stays the default
+  until the parity gate and the permanent compatibility floor afterwards.
 - Adopting pydantic-ai's Agent, tools, or graph machinery — **only**
   `pydantic_ai.direct` + model classes + message types. PenguiFlow remains
   the agent runtime.
@@ -487,22 +505,95 @@ don't depend on the transport.
 
 ### Phase 4 — Cost + trace automation
 
-- `genai-prices` behind the pricing facade; OTel GenAI spans at the adapter
-  seam wired through `metrics.py`/`middlewares.py`; MLflow example.
+- ~~Trace seam~~ **landed in 3.11.0a1**: `penguiflow/llm/tracing.py` —
+  pluggable `LLMTraceSink` at the `NativeLLMAdapter.complete()` seam (covers
+  every transport and every `FallbackLLMClient` adapter), with
+  `MlflowLLMTraceSink` (MLflow Tracing spans) and `LoggingLLMTraceSink`;
+  transparent enablement via `PENGUIFLOW_LLM_TRACING=mlflow|log`.
+- Remaining: `genai-prices` behind the pricing facade; MLflow example.
 
-### Phase 5 — Parity gate, per-family default flips, native shrink
+### Phase 5 — Native tool-calling planner mode (opt-in)
+
+The deepest change of the train, governed by Decision 9: provider-native tool
+calls replace the prompted `{next_node, args}` JSON envelope as the **wire
+format**, while `PlannerAction` remains the **decision shape** the runtime
+executes. The extraction layer changes; nothing downstream of it does.
+
+What it eliminates (the expected payoff):
+
+- **The in-flight JSON streaming extractors** (`_StreamingArgsExtractor`,
+  `_StreamingThoughtExtractor`): with tool calls on their own channel, the
+  content channel is plain text — final-answer streaming becomes raw content
+  deltas, no JSON envelope to parse token-by-token.
+- **Most of the parse/repair pressure**: args are provider-validated against
+  the declared schema before they reach us; fence-stripping, multi-object
+  salvage, and last-ditch regex become prompted-mode-only code.
+- **The synthetic parallel envelope**: native parallel tool calls (multiple
+  `tool_calls` in one response) replace `next_node="parallel"` + `args.steps`
+  as the wire form. They map into the **same** parallel plan the runtime
+  already executes (`execute_parallel_plan` unchanged).
+- **Prompt weight**: tool schemas move from prompt text into API tool
+  declarations (cheaper, prompt-cache-friendly, no schema drift between
+  prompt and validator).
+
+What it must preserve (binding):
+
+- **Decision-shape invariance.** A mapping layer converts
+  `ToolCallPart`(s) → `PlannerAction`; parallel fanout, explicit join
+  injection, trajectory recording, planner events, pause/resume, and the A2A
+  surface are byte-identical across modes. The dual-mode conformance suite
+  (below) is the proof.
+- **Tool-result round-trip**: observations return as tool-role messages with
+  `tool_call_id` pairing (the native layer's `ToolResultPart` already models
+  this). Trajectory summarization must handle the new message shapes.
+- **Structured final answers converge**: in native mode, `final_response`
+  is itself a declared tool whose schema is `final_response_model` —
+  provider-validated, making Phase 2's corrective-turn retry the shared
+  fallback rather than the primary mechanism.
+- **Join semantics**: native parallel calls don't express a join step; the
+  explicit join injection contract (v2.4) is preserved by the mapping layer,
+  not delegated to the model.
+
+Wiring:
+
+- Planner opt-in: `ReactPlanner(tool_call_mode="prompted" | "native")`,
+  default `"prompted"` (zero behavior change). Eligibility gated by
+  `ModelProfile.supports_tools`; a native-mode planner running a model (or a
+  fallback-chain member) without tool support downgrades that call to
+  prompted mode with an event, never fails.
+- Adapter surface: additive — a new method on `NativeLLMAdapter` (e.g.
+  `complete_with_tools()` returning content + typed tool calls), leaving
+  `JSONLLMClient.complete()` untouched per Decision 8. The pydantic-ai
+  transport carries this naturally (`function_tools` in
+  `ModelRequestParameters`, streamed `ToolCallPartDelta` assembly handled
+  upstream); the kept native providers already have `ToolSpec`/
+  `_to_openai_tools` plumbing.
+- Tool-call streaming-delta assembly (provider-divergent fragment merging,
+  index-keyed) is the transport's job, not ours — one more reason the
+  transport phase lands first.
+
+Tests: the planner test matrix runs in **both modes** (dual-mode conformance
+suite); parallel + join parity; mixed fallback-chain downgrade; streaming
+final answer in native mode; negative paths (model without tool support,
+malformed provider tool call).
+
+### Phase 6 — Parity gate, per-family default flips, native shrink
 
 - Full suite + live matrix (Databricks + OpenRouter) green under
-  `transport="pydantic-ai"`.
+  `transport="pydantic-ai"`, in **both planner modes** for tool-capable
+  models.
 - Flip defaults per model family where upstream is proven; mark OpenAI,
   Anthropic, Google, Bedrock, NIM native providers deprecated (≥2 minor
   releases); `litellm` extra removal scheduled; CHANGELOG migration notes.
+- `tool_call_mode` default stays `"prompted"` in 3.11; a default flip for
+  tool-capable models is a post-3.11 decision backed by production telemetry
+  (the trace seam gives per-mode latency/cost/error evidence).
 
-### Phase 6 (future, separate branches)
+### Phase 7 (future, separate branches)
 
-- Native tool-calling planner mode; Databricks native-provider retirement if
-  upstream #4036 lands and proves out; liter-llm / any-llm re-evaluation
-  (~2026-12); process-wide cooldown store; multimodal outputs as tools.
+- Databricks native-provider retirement if upstream #4036 lands and proves
+  out; liter-llm / any-llm re-evaluation (~2026-12); process-wide cooldown
+  store; multimodal outputs as tools; `tool_call_mode` default flip.
 
 ---
 
@@ -518,9 +609,13 @@ don't depend on the transport.
    (including the structured-output prompt content when
    `final_response_model` is unset).
 4. Every phase ships unit + negative-path tests and keeps coverage ≥ 84.5%.
-5. Default flips (Phase 5) require the live validation matrix per family, not
+5. Default flips (Phase 6) require the live validation matrix per family, not
    just unit tests.
-6. Supply-chain hygiene: exact pins + hash-locked resolution for the
+6. Native tool-calling mode (Phase 5) ships only with the dual-mode
+   conformance suite green: the planner test matrix passes identically in
+   `"prompted"` and `"native"` modes for tool-capable models, including
+   parallel + join parity.
+7. Supply-chain hygiene: exact pins + hash-locked resolution for the
    transport; attestation check documented in CI notes.
 
 ---
@@ -529,7 +624,7 @@ don't depend on the transport.
 
 1. pydantic-ai 2.0 timeline and migration surface — how long is the `<2` pin
    sustainable, and does 2.x change `pydantic_ai.direct`? (Watch upstream;
-   revisit at Phase 5.)
+   revisit at Phase 6.)
 2. `opentelemetry-api` lands as a hard transitive dep via pydantic-ai-slim —
    acceptable, or does it need to stay behind the optional extra? (It aligns
    with the §6 tracing track, but penguiflow core today has no OTel dep.)
@@ -538,12 +633,22 @@ don't depend on the transport.
    table in profiles, or adopt upstream naming for new models?
 4. Flat `api_keys` in `ModelFallbackConfig` across mixed transports — the
    per-model key form (robustness plan open question) likely becomes
-   necessary; resolve before Phase 5.
+   necessary; resolve before Phase 6.
 5. Should `DSPyLLMClient` get the structured-final-answer path too, or is it
    exempt? (It bypasses the native layer entirely.)
 6. NIM: served through the transport's OpenAI-compatible path — does any
    production consumer rely on NIM-specific behavior (`reasoning_content`,
    `<think>` tags) that needs a profile correction?
+7. Native-mode trajectory compaction: tool-role messages with `tool_call_id`
+   pairing must survive (or be coherently dropped by) trajectory
+   summarization — providers reject dangling tool results whose paired
+   assistant tool_call was summarized away. Needs an explicit compaction rule
+   before Phase 5 ships.
+8. Databricks Claude tool calling + adaptive thinking interaction: verify in
+   the Phase 5 live tests that `thinking` and `tools` compose on the
+   Databricks route (Anthropic requires preserving thinking blocks across
+   tool-use turns — confirm the Databricks OpenAI-compat surface handles
+   this or gate native mode off for those models via profile).
 
 ---
 
