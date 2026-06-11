@@ -55,6 +55,16 @@ def _openrouter_preferred_mode(requested: StructuredMode, model: str) -> Structu
     return "json_object"
 
 
+def _is_claude_model(model: str) -> bool:
+    route = model.lower().strip()
+    if route.startswith("openrouter/"):
+        route = route.removeprefix("openrouter/")
+    if route.startswith("databricks/"):
+        route = route.removeprefix("databricks/")
+    model_leaf = route.split("/", 1)[-1] if "/" in route else route
+    return "claude" in model_leaf
+
+
 def resolve_policy(
     *,
     provider_name: str,
@@ -78,6 +88,15 @@ def resolve_policy(
     elif provider_name == "nim" and requested_mode == "json_schema":
         # NIM structured calls are more stable with json_object semantics.
         mode = "json_object"
+    elif (
+        provider_name in {"anthropic", "databricks"}
+        and requested_mode in {"json_schema", "json_object"}
+        and use_native_reasoning
+        and _is_claude_model(model)
+    ):
+        # Anthropic Claude endpoints do not support forced structured output
+        # together with thinking/reasoning.
+        mode = "text"
 
     inject_reasoning_effort = use_native_reasoning
     emit_reasoning_callbacks = True

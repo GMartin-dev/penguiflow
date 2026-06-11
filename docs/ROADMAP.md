@@ -447,7 +447,7 @@ June 2026 (21 working days, ~160h projected)
 | **Active** | Apr–Jun |
 | **Description** | LLM-as-judge evaluates each agent response for accuracy, completeness, tone, and instruction adherence. Low-scoring outputs trigger a reflection loop where the agent revises its answer. If score remains below threshold after N retries, escalates to human review. |
 | **Impact if not done** | Agents deliver incorrect or low-quality responses with no self-correction — users lose trust in outputs. Without reflection, every error reaches the user. |
-| **Sample tools** | `JudgeConfig(rubric="reports", min_score=0.8, max_retries=2)` → `penguiflow/planner/reflection_prompts.py` already ships judge prompts. Extends `ReactPlanner.run()` with `judge=JudgeConfig(...)`. |
+| **Sample tools** | `ReflectionConfig(enabled=True, quality_threshold=0.8, max_revisions=2, criteria=ReflectionCriteria(...))` → `penguiflow/planner/reflection_prompts.py` ships the critique prompts. Passed to the `ReactPlanner(...)` constructor as `reflection_config=ReflectionConfig(...)` (set `use_separate_llm=True` + `reflection_llm=...` for a separate critique model). The structured critique is returned as `ReflectionCritique` (`score`, `passed`, `feedback`, `issues`, `suggestions`). |
 | **Other tasks** | PF-003 (HITL for escalations), QE-002 (Scoring criteria definition), QE-005 (Domain expert validation) |
 
 ---
