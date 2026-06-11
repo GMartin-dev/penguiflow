@@ -186,7 +186,7 @@ extend-exclude = [
     "penguiflow_a2a/grpc/a2a_pb2_grpc.py",
     "tmp/codex-skills",
     "test_generation",
-    "claude/",
+    ".claude/",
 ]
 
 [tool.ruff.lint]
