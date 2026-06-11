@@ -54,6 +54,13 @@ class ModelProfile:
     # Reasoning configuration
     reasoning_effort_param: str | None = None  # Parameter name if supported
     thinking_tags: tuple[str, str] | None = None  # e.g., ("<think>", "</think>")
+    # How a reasoning-effort request is expressed for this model:
+    # - "adaptive_effort": thinking={"type": "adaptive"} + output_config.effort
+    #   (e.g. Databricks Claude Opus 4.7/4.8)
+    # - "thinking_budget": thinking={"type": "enabled", "budget_tokens": N}
+    # - "reasoning_effort": pass the reasoning_effort parameter through as-is
+    # None: the provider falls back to model-name heuristics.
+    reasoning_request_style: Literal["adaptive_effort", "thinking_budget", "reasoning_effort"] | None = None
 
     # Provider quirks
     strict_mode_default: bool = True  # Default for strict JSON schema

@@ -64,6 +64,9 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-5": (0.005, 0.025),  # $5/$25 per 1M tokens
     "claude-sonnet-4-5": (0.003, 0.015),  # $3/$15 per 1M tokens
     "claude-haiku-4-5": (0.001, 0.005),  # $1/$5 per 1M tokens
+    # Anthropic - Claude 4.8 Series
+    # Assumed same rate card as Opus 4.7 - verify against account pricing.
+    "claude-opus-4-8": (0.005, 0.025),  # $5/$25 per 1M tokens
     # Anthropic - Claude 4.7 Series
     "claude-opus-4-7": (0.005, 0.025),  # $5/$25 per 1M tokens
     # Anthropic - Claude 4.6 Series
@@ -137,6 +140,8 @@ PRICING: dict[str, tuple[float, float]] = {
     "databricks-claude-opus-4-5": (0.005, 0.025),
     "databricks-claude-opus-4-6": (0.005, 0.025),
     "databricks-claude-opus-4-7": (0.005, 0.025),
+    # Assumed same rate card as Opus 4.7 - verify against account pricing.
+    "databricks-claude-opus-4-8": (0.005, 0.025),
     "databricks-claude-haiku-4-5": (0.001, 0.005),
     "databricks-gemini-3-5-flash": (0.0015, 0.009),
     "databricks-gpt-5-4-mini": (0.00075, 0.0045),
