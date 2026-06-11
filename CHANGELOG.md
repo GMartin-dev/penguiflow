@@ -17,6 +17,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   (Databricks rejects the parameter for this model — live-verified).
 
 ### Added
+- **pydantic-ai transport (opt-in)**: `create_native_adapter(transport="pydantic-ai")`
+  (or `NativeLLMAdapter(..., transport=...)`) routes completions through
+  pydantic-ai's direct model layer behind the existing `Provider` seam — same
+  `JSONLLMClient` surface, profiles, fallback, pricing, and tracing. Per-model
+  pinning via the new `ModelProfile.preferred_transport` field (explicit kwarg >
+  profile > `"native"` default); Databricks Claude reasoning models pin `"native"`
+  while the generic transport cannot parse their reasoning content blocks.
+  Requires the new `penguiflow[pydantic-ai]` extra. Live-verified on Databricks
+  (streaming, `json_schema`, cost) and OpenRouter (streaming reasoning deltas).
+- The litellm-backed planner client (`use_native_llm=False`) now emits a
+  `DeprecationWarning`; it will be removed in a future release.
 - LLM call auto-tracing: every `NativeLLMAdapter.complete()` (and therefore every
   `FallbackLLMClient` adapter, with spans attributed to the model actually called)
   can emit one span per LLM call to a pluggable `LLMTraceSink`. Ships with

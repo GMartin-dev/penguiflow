@@ -16,6 +16,7 @@ from typing import Any
 from .errors import LLMRateLimitError, is_retryable, is_temperature_error
 from .native_policy import StructuredMode, next_mode, resolve_policy
 from .pricing import calculate_cost, get_pricing
+from .profiles import get_profile
 from .providers import create_provider
 from .tracing import LLMCallSpan, LLMTraceSink, resolve_trace_sink_from_env
 from .types import (
@@ -28,6 +29,44 @@ from .types import (
 
 logger = logging.getLogger("penguiflow.llm.protocol")
 _REASONING_OFF_VALUES = frozenset({"off", "none", "false", "0", "disable", "disabled", "no"})
+_TRANSPORTS = ("native", "pydantic-ai")
+
+
+def _resolve_transport(model: str, transport: str | None) -> str:
+    """Resolve the transport for ``model``: explicit kwarg > profile > default.
+
+    See ``ModelProfile.preferred_transport`` — per-model transport pinning
+    (e.g. Databricks Claude reasoning models stay on the native transport
+    while the generic one cannot parse their reasoning content blocks).
+    """
+    if transport is not None:
+        if transport not in _TRANSPORTS:
+            raise ValueError(f"Unknown transport {transport!r}; expected one of {_TRANSPORTS}")
+        return transport
+    preferred = getattr(get_profile(model), "preferred_transport", None)
+    if preferred in _TRANSPORTS:
+        return preferred
+    return "native"
+
+
+def _create_transport_provider(
+    model: str,
+    *,
+    transport: str | None,
+    api_key: str | None,
+    base_url: str | None,
+    **provider_kwargs: Any,
+) -> Any:
+    resolved = _resolve_transport(model, transport)
+    if resolved == "pydantic-ai":
+        try:
+            from .providers.pydantic_ai import PydanticAIProvider
+        except ImportError as e:  # pragma: no cover - exercised via packaging, not unit tests
+            raise ImportError(
+                "transport='pydantic-ai' requires the pydantic-ai extra: pip install 'penguiflow[pydantic-ai]'"
+            ) from e
+        return PydanticAIProvider(model, api_key=api_key, base_url=base_url, **provider_kwargs)
+    return create_provider(model, api_key=api_key, base_url=base_url, **provider_kwargs)
 
 
 def _normalize_json_schema(schema: Any) -> dict[str, Any]:
@@ -193,6 +232,7 @@ class NativeLLMAdapter:
         reasoning_effort: str | None = None,
         retry_rate_limit_errors: bool = True,
         trace_sink: LLMTraceSink | None = None,
+        transport: str | None = None,
         **provider_kwargs: Any,
     ) -> None:
         """Initialize the adapter.
@@ -215,6 +255,10 @@ class NativeLLMAdapter:
                 ``complete()`` call. When omitted, the sink is resolved from
                 the ``PENGUIFLOW_LLM_TRACING`` env var (``mlflow`` or ``log``)
                 so tracing can be enabled without code changes.
+            transport: ``"native"`` (default) or ``"pydantic-ai"``. ``None``
+                resolves via ``ModelProfile.preferred_transport`` then falls
+                back to ``"native"``. The pydantic-ai transport requires the
+                ``penguiflow[pydantic-ai]`` extra.
             **provider_kwargs: Additional provider-specific configuration.
         """
         self._model = model
@@ -228,9 +272,10 @@ class NativeLLMAdapter:
         self._retry_rate_limit_errors = retry_rate_limit_errors
         self._trace_sink = trace_sink if trace_sink is not None else resolve_trace_sink_from_env()
 
-        # Create the underlying provider
-        self._provider = create_provider(
+        # Create the underlying provider (transport: explicit > profile > native)
+        self._provider = _create_transport_provider(
             model,
+            transport=transport,
             api_key=api_key,
             base_url=base_url,
             **provider_kwargs,
@@ -738,6 +783,7 @@ def create_native_adapter(
     fallback: Any | None = None,
     cooldown_store: Any | None = None,
     trace_sink: LLMTraceSink | None = None,
+    transport: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Factory function to create a NativeLLMAdapter (or fallback client).
@@ -763,6 +809,10 @@ def create_native_adapter(
             Defaults to env-var resolution (``PENGUIFLOW_LLM_TRACING``); with
             ``fallback`` set, every per-model adapter shares the same sink so
             failover is visible per model actually called.
+        transport: ``"native"`` (default) or ``"pydantic-ai"``. ``None``
+            resolves per model via ``ModelProfile.preferred_transport``; with
+            ``fallback`` set, each chain member resolves against its own
+            profile (an explicit value applies to the whole chain).
         **kwargs: Additional provider configuration.
 
     Returns:
@@ -792,6 +842,7 @@ def create_native_adapter(
         use_native_reasoning=use_native_reasoning,
         reasoning_effort=reasoning_effort,
         trace_sink=trace_sink,
+        transport=transport,
         **kwargs,
     )
 

@@ -62,6 +62,13 @@ class ModelProfile:
     # None: the provider falls back to model-name heuristics.
     reasoning_request_style: Literal["adaptive_effort", "thinking_budget", "reasoning_effort"] | None = None
 
+    # Transport pinning. None = follow the adapter-level `transport` selection;
+    # set to pin this model to a transport regardless of the default (an
+    # explicit `transport=` kwarg still wins). E.g. Databricks Claude
+    # reasoning models pin "native" while the generic transport cannot parse
+    # their reasoning content blocks.
+    preferred_transport: Literal["native", "pydantic-ai"] | None = None
+
     # Provider quirks
     strict_mode_default: bool = True  # Default for strict JSON schema
     supports_system_role: bool = True  # Some models need user role for system
