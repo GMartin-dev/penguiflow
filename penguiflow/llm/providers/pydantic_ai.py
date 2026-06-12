@@ -33,6 +33,7 @@ from ..errors import (
 )
 from ..profiles import ModelProfile, get_profile
 from ..types import (
+    AudioPart,
     CancelToken,
     CompletionResponse,
     ImagePart,
@@ -317,6 +318,8 @@ class PydanticAIProvider(Provider):
                 if part.text:
                     content.append(part.text)
             elif isinstance(part, ImagePart):
+                content.append(pai_messages.BinaryContent(data=part.data, media_type=part.media_type))
+            elif isinstance(part, AudioPart):
                 content.append(pai_messages.BinaryContent(data=part.data, media_type=part.media_type))
         return content
 

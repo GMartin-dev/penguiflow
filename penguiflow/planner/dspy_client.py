@@ -175,7 +175,7 @@ class DSPyLLMClient:
         }
         return type(f"{schema_name}Signature", (dspy.Signature,), attrs)
 
-    def _messages_to_text(self, messages: Sequence[Mapping[str, str]]) -> str:
+    def _messages_to_text(self, messages: Sequence[Mapping[str, Any]]) -> str:
         """Convert OpenAI-style messages to a single text prompt.
 
         Args:
@@ -201,7 +201,7 @@ class DSPyLLMClient:
     async def complete(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
     ) -> tuple[str, float]:
         """Generate completion with structured output via DSPy.

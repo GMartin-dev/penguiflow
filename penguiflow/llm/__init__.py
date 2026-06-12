@@ -155,6 +155,7 @@ from .tracing import (
 
 # Core types
 from .types import (
+    AudioPart,
     CancelToken,
     CompletionResponse,
     ContentPart,
@@ -178,6 +179,7 @@ from .types import (
 
 __all__ = [
     # Types
+    "AudioPart",
     "CancelToken",
     "CompletionResponse",
     "ContentPart",

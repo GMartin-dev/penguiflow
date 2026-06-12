@@ -13,23 +13,29 @@ import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
 
-from .errors import LLMRateLimitError, is_retryable, is_temperature_error
+from .errors import LLMInvalidRequestError, LLMRateLimitError, is_retryable, is_temperature_error
 from .native_policy import StructuredMode, next_mode, resolve_policy
 from .pricing import calculate_cost, get_pricing
 from .profiles import get_profile
 from .providers import create_provider
 from .tracing import LLMCallSpan, LLMTraceSink, resolve_trace_sink_from_env
 from .types import (
+    AudioPart,
+    ContentPart,
+    ImagePart,
     LLMMessage,
     LLMRequest,
     StreamCallback,
     StreamEvent,
     TextPart,
+    ToolCallPart,
+    ToolResultPart,
 )
 
 logger = logging.getLogger("penguiflow.llm.protocol")
 _REASONING_OFF_VALUES = frozenset({"off", "none", "false", "0", "disable", "disabled", "no"})
 _TRANSPORTS = ("native", "pydantic-ai")
+INLINE_MULTIMODAL_DATA_LIMIT_BYTES = 32 * 1024
 
 
 def _resolve_transport(model: str, transport: str | None) -> str:
@@ -233,6 +239,7 @@ class NativeLLMAdapter:
         retry_rate_limit_errors: bool = True,
         trace_sink: LLMTraceSink | None = None,
         transport: str | None = None,
+        multimodal_inline_data_limit_bytes: int = INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
         **provider_kwargs: Any,
     ) -> None:
         """Initialize the adapter.
@@ -259,8 +266,13 @@ class NativeLLMAdapter:
                 resolves via ``ModelProfile.preferred_transport`` then falls
                 back to ``"native"``. The pydantic-ai transport requires the
                 ``penguiflow[pydantic-ai]`` extra.
+            multimodal_inline_data_limit_bytes: Maximum inline byte size for
+                each image/audio content part before provider serialization.
+                Defaults to 32 KiB.
             **provider_kwargs: Additional provider-specific configuration.
         """
+        if multimodal_inline_data_limit_bytes < 0:
+            raise ValueError("multimodal_inline_data_limit_bytes must be >= 0")
         self._model = model
         self._temperature = temperature
         self._max_retries = max_retries
@@ -271,6 +283,7 @@ class NativeLLMAdapter:
         self._reasoning_effort = reasoning_effort
         self._retry_rate_limit_errors = retry_rate_limit_errors
         self._trace_sink = trace_sink if trace_sink is not None else resolve_trace_sink_from_env()
+        self._multimodal_inline_data_limit_bytes = multimodal_inline_data_limit_bytes
 
         # Create the underlying provider (transport: explicit > profile > native)
         self._provider = _create_transport_provider(
@@ -284,7 +297,7 @@ class NativeLLMAdapter:
     async def complete(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
         stream: bool = False,
         on_stream_chunk: Callable[[str, bool], None] | None = None,
@@ -333,7 +346,7 @@ class NativeLLMAdapter:
     async def _complete_inner(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
         stream: bool = False,
         on_stream_chunk: Callable[[str, bool], None] | None = None,
@@ -346,6 +359,7 @@ class NativeLLMAdapter:
             model=self._provider.model,
             messages=self._convert_messages(messages),
         )
+        self._validate_multimodal_parts(llm_messages)
         requested_mode = _requested_mode(response_format)
         mode_override: StructuredMode | None = None
         nim_structured_reasoning_fallback_off = False
@@ -583,7 +597,7 @@ class NativeLLMAdapter:
     async def stream_events(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
         timeout_s: float | None = None,
     ) -> AsyncIterator[StreamEvent]:
@@ -600,6 +614,7 @@ class NativeLLMAdapter:
             model=self._provider.model,
             messages=self._convert_messages(messages),
         )
+        self._validate_multimodal_parts(llm_messages)
         requested_mode = _requested_mode(response_format)
         request, _ = self._build_request_with_runtime(
             llm_messages,
@@ -645,7 +660,7 @@ class NativeLLMAdapter:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
 
-    def _convert_messages(self, messages: Sequence[Mapping[str, str]]) -> list[LLMMessage]:
+    def _convert_messages(self, messages: Sequence[Mapping[str, Any]]) -> list[LLMMessage]:
         """Convert dict messages to LLMMessage format."""
         result: list[LLMMessage] = []
         for msg in messages:
@@ -656,9 +671,92 @@ class NativeLLMAdapter:
             if role not in ("system", "user", "assistant", "tool"):
                 role = "user"
 
-            result.append(LLMMessage(role=role, parts=[TextPart(text=content)]))  # type: ignore
+            result.append(LLMMessage(role=role, parts=self._convert_content(content)))
 
         return result
+
+    def _convert_content(self, content: Any) -> list[ContentPart]:
+        if content is None:
+            return [TextPart(text="")]
+        if isinstance(content, str):
+            return [TextPart(text=content)]
+        if isinstance(content, (TextPart, ImagePart, AudioPart, ToolCallPart, ToolResultPart)):
+            return [content]
+        if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+            parts: list[ContentPart] = []
+            for item in content:
+                parts.extend(self._convert_content_part(item))
+            return parts or [TextPart(text="")]
+        return [TextPart(text=str(content))]
+
+    def _convert_content_part(self, part: Any) -> list[ContentPart]:
+        if isinstance(part, (TextPart, ImagePart, AudioPart, ToolCallPart, ToolResultPart)):
+            return [part]
+        if not isinstance(part, Mapping):
+            return [TextPart(text=str(part))]
+
+        part_type = str(part.get("type", "")).lower()
+        if part_type == "text" or "text" in part:
+            return [TextPart(text=str(part.get("text", "")))]
+        if part_type in {"image", "image_part", "image_url"}:
+            data = part.get("data")
+            if not isinstance(data, bytes):
+                raise LLMInvalidRequestError(
+                    message="Image content parts require inline bytes in the 'data' field",
+                    provider=self._provider.provider_name,
+                )
+            detail = str(part.get("detail", "auto"))
+            if detail not in {"auto", "low", "high"}:
+                detail = "auto"
+            return [
+                ImagePart(
+                    data=data,
+                    media_type=str(part.get("media_type", "image/png")),
+                    detail=detail,  # type: ignore[arg-type]
+                )
+            ]
+        if part_type in {"audio", "audio_part"}:
+            data = part.get("data")
+            if not isinstance(data, bytes):
+                raise LLMInvalidRequestError(
+                    message="Audio content parts require inline bytes in the 'data' field",
+                    provider=self._provider.provider_name,
+                )
+            return [AudioPart(data=data, media_type=str(part.get("media_type", "audio/wav")))]
+        return [TextPart(text=str(part))]
+
+    def _validate_multimodal_parts(self, messages: Sequence[LLMMessage]) -> None:
+        profile = self._provider.profile
+        for message in messages:
+            for part in message.parts:
+                if isinstance(part, ImagePart):
+                    if not profile.supports_image_input:
+                        raise LLMInvalidRequestError(
+                            message=f"Model '{self._provider.model}' does not support image input",
+                            provider=self._provider.provider_name,
+                        )
+                    if len(part.data) > self._multimodal_inline_data_limit_bytes:
+                        raise LLMInvalidRequestError(
+                            message=(
+                                f"Image input exceeds {self._multimodal_inline_data_limit_bytes} byte inline limit "
+                                f"({len(part.data)} bytes)"
+                            ),
+                            provider=self._provider.provider_name,
+                        )
+                elif isinstance(part, AudioPart):
+                    if not profile.supports_audio_input:
+                        raise LLMInvalidRequestError(
+                            message=f"Model '{self._provider.model}' does not support audio input",
+                            provider=self._provider.provider_name,
+                        )
+                    if len(part.data) > self._multimodal_inline_data_limit_bytes:
+                        raise LLMInvalidRequestError(
+                            message=(
+                                f"Audio input exceeds {self._multimodal_inline_data_limit_bytes} byte inline limit "
+                                f"({len(part.data)} bytes)"
+                            ),
+                            provider=self._provider.provider_name,
+                        )
 
     def _build_request(
         self,
@@ -784,6 +882,7 @@ def create_native_adapter(
     cooldown_store: Any | None = None,
     trace_sink: LLMTraceSink | None = None,
     transport: str | None = None,
+    multimodal_inline_data_limit_bytes: int = INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
     **kwargs: Any,
 ) -> Any:
     """Factory function to create a NativeLLMAdapter (or fallback client).
@@ -813,6 +912,9 @@ def create_native_adapter(
             resolves per model via ``ModelProfile.preferred_transport``; with
             ``fallback`` set, each chain member resolves against its own
             profile (an explicit value applies to the whole chain).
+        multimodal_inline_data_limit_bytes: Maximum inline byte size for each
+            image/audio content part before provider serialization. Defaults
+            to 32 KiB and is forwarded to every fallback-chain adapter.
         **kwargs: Additional provider configuration.
 
     Returns:
@@ -824,8 +926,22 @@ def create_native_adapter(
         model_name = model.get("model", "")
         api_key = model.get("api_key")
         base_url = model.get("base_url") or model.get("api_base")
+        multimodal_inline_data_limit_bytes = int(
+            model.get("multimodal_inline_data_limit_bytes", multimodal_inline_data_limit_bytes)
+        )
         # Merge other config as kwargs
-        extra_kwargs = {k: v for k, v in model.items() if k not in ("model", "api_key", "base_url", "api_base")}
+        extra_kwargs = {
+            k: v
+            for k, v in model.items()
+            if k
+            not in (
+                "model",
+                "api_key",
+                "base_url",
+                "api_base",
+                "multimodal_inline_data_limit_bytes",
+            )
+        }
         kwargs.update(extra_kwargs)
     else:
         model_name = model
@@ -843,6 +959,7 @@ def create_native_adapter(
         reasoning_effort=reasoning_effort,
         trace_sink=trace_sink,
         transport=transport,
+        multimodal_inline_data_limit_bytes=multimodal_inline_data_limit_bytes,
         **kwargs,
     )
 

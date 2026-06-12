@@ -55,7 +55,15 @@ class ImagePart:
     detail: Literal["auto", "low", "high"] = "auto"
 
 
-ContentPart = TextPart | ToolCallPart | ToolResultPart | ImagePart
+@dataclass(frozen=True, slots=True)
+class AudioPart:
+    """Audio content part."""
+
+    data: bytes
+    media_type: str  # e.g., "audio/wav", "audio/mpeg"
+
+
+ContentPart = TextPart | ToolCallPart | ToolResultPart | ImagePart | AudioPart
 
 
 # ---------------------------------------------------------------------------
