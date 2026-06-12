@@ -662,16 +662,59 @@ What it must preserve (binding):
   injection, trajectory recording, planner events, pause/resume, and the A2A
   surface are byte-identical across modes. The dual-mode conformance suite
   (below) is the proof.
-- **Tool-result round-trip**: observations return as tool-role messages with
-  `tool_call_id` pairing (the native layer's `ToolResultPart` already models
-  this). Trajectory summarization must handle the new message shapes.
-- **Structured final answers converge**: in native mode, `final_response`
-  is itself a declared tool whose schema is `final_response_model` —
-  provider-validated, making Phase 2's corrective-turn retry the shared
-  fallback rather than the primary mechanism.
 - **Join semantics**: native parallel calls don't express a join step; the
   explicit join injection contract (v2.4) is preserved by the mapping layer,
   not delegated to the model.
+
+Implementation decisions (settled 2026-06-12, before code):
+
+- **D5.1 — Finish form: content-only turn = final answer.** No synthetic
+  `final_response` tool is declared. A native turn that returns zero tool
+  calls finishes the run; its content is the answer (maps to
+  `PlannerAction(next_node="final_response", args={"answer": content})`).
+  Content alongside tool calls (a real pattern — live probe showed Claude
+  emitting 76–116-char preambles with parallel tool calls) maps to
+  `action.thought`.
+- **D5.2 — Trajectory encoding unchanged (§12.7 resolved by design).** The
+  conversation history stays text-encoded exactly as today; native assistant
+  tool-call messages and tool-role results are NOT replayed, so there is no
+  `tool_call_id` round-trip to orphan. Compaction, pause/resume, and A2A are
+  untouched. (This supersedes the earlier "tool-result round-trip as
+  tool-role messages" sketch — that form returns only if provider-side
+  tool-result caching is ever needed.)
+- **D5.3 — Streaming: thinking-channel live, answer flush on finish.**
+  Because preamble-with-tool-calls is real (D5.1 probe), content deltas
+  cannot optimistically stream to the answer channel. Native mode streams
+  content deltas live on the `thinking` channel; when the turn completes with
+  no tool calls, the full answer is flushed to the `answer` channel (single
+  chunk + done, the same emission shape `finish_repair` uses). Trade-off vs
+  prompted mode: tool-turn thoughts now stream live (better), final-answer
+  token streaming becomes a single flush (worse); revisit with
+  tool-call-delta lookahead post-3.11. Reasoning deltas unchanged.
+- **D5.4 — Structured final answers reuse Phase 2 machinery (supersedes the
+  "final_response as declared tool" sketch).** A content-finish carries no
+  `structured` payload, so `_ensure_structured_final` runs its existing
+  corrective extraction turn (schema + answer → validated payload). Cost: one
+  extra LLM call per run in native mode when `final_response_model` is set;
+  note `final_response_retries=0` would always degrade in native mode.
+- **D5.5 — Parallel mapping**: N>1 tool calls → `next_node="parallel"`,
+  `args={"steps": [{"node", "args"}...]}` (no join — joins are not
+  expressible natively in v1); 1 call → direct tool action. Tool args parse
+  defensively (`json.loads`; on failure `{}` → existing arg-validation
+  repair).
+- **D5.6 — multi_action / auto_seq are prompted-mode-only** (they parse
+  multiple JSON objects from text; native turns can't produce that shape —
+  parallel tool calls cover the use case).
+- **§12.8 resolved live (2026-06-12)**: adaptive thinking + parallel native
+  tool calls compose on `databricks-claude-opus-4-8` through the native
+  provider. `databricks-gpt-5-5` + tools reconfirmed 400 (Responses API) →
+  `supports_native_tool_calls=False`.
+- **Prompt**: native mode swaps the `<output_format>`/`<action_schema>`/
+  `<finishing>`/`<parallel_execution>` sections for native-calling variants
+  and omits `<structured_final_response>` (the extraction turn is
+  self-contained). The `<available_tools>` catalog section is kept v1
+  (descriptions/side-effects still inform selection); schema-dedup token
+  savings deferred.
 
 Wiring:
 
@@ -696,6 +739,40 @@ Tests: the planner test matrix runs in **both modes** (dual-mode conformance
 suite); parallel + join parity; mixed fallback-chain downgrade; streaming
 final answer in native mode; negative paths (model without tool support,
 malformed provider tool call).
+
+**SHIPPED (2026-06-12).** Implementation:
+
+- `ReactPlanner(tool_call_mode="prompted" | "native")` (default `"prompted"`,
+  invalid values fail loudly). Native step path in
+  `penguiflow/planner/react_step_native.py`; the prompted path in
+  `react_step.py` is untouched. Eligibility checked per step
+  (`complete_with_tools` present + `supports_tools` +
+  `supports_native_tool_calls`); ineligible runs downgrade to prompted with a
+  one-per-run `tool_call_mode_downgraded` event.
+- Adapter surface: `NativeLLMAdapter.complete_with_tools()` →
+  `NativeToolCallResult(content, tool_calls, cost, reasoning_content)`,
+  traced (`response_format_kind="native_tools"`), with retry/temperature
+  recovery; `FallbackLLMClient.complete_with_tools()` shares the refactored
+  429-failover core (`_with_failover`).
+- **Wire-safe tool aliases** (found live on the youtube agent): catalog names
+  like MCP's `youtube.download_video` violate provider function-name patterns
+  (`^[a-zA-Z0-9_-]{1,128}$`, hard 400 on Databricks). Tools are declared
+  under sanitized aliases with collision handling; responses map back to real
+  catalog names before `PlannerAction`.
+- Native-mode system prompt swaps `<output_format>`/`<finishing>`/
+  `<parallel_execution>` and drops `<action_schema>` +
+  `<structured_final_response>` (~40% smaller prompt).
+
+Live verification (Databricks `claude-opus-4-8`, real youtube-download agent
+with MCP tools): native tool call executed and answered correctly; streaming
+per D5.3 (28 thinking-channel chunks live + answer flush; prompted control
+streams 21 token-level answer chunks); **structured final answer through the
+native path validated** (`final_response_structured_repair_attempt` →
+`validated`, exactly one extraction turn); `databricks/databricks-gpt-5-5` in
+native mode downgraded live with the route reason and completed via prompted
+mode with full token streaming. Reasoning callback path verified by unit
+tests + OpenRouter; Databricks Claude adaptive thinking emits no visible
+deltas (pre-existing route behavior, identical in prompted mode).
 
 ### Phase 6 — Parity gate, per-family default flips, native shrink
 

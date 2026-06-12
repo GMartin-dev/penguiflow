@@ -21,6 +21,7 @@ PROFILES: dict[str, ModelProfile] = {
     # OpenAI GPT-5 Series on Databricks (January 2026)
     # ==========================================================================
     "databricks-gpt-5-5-pro": ModelProfile(
+        supports_native_tool_calls=False,  # chat-completions rejects tools; needs Responses API
         supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
@@ -37,6 +38,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-5": ModelProfile(
+        supports_native_tool_calls=False,  # chat-completions rejects tools; needs Responses API
         supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,

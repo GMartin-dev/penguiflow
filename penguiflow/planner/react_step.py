@@ -35,6 +35,19 @@ def _prepend_system_message(messages: list[dict[str, str]], content: str) -> lis
 
 
 async def step(planner: Any, trajectory: Trajectory) -> PlannerAction:
+    if getattr(planner, "_tool_call_mode", "prompted") == "native":
+        from .react_step_native import (
+            emit_downgrade_once,
+            resolve_native_eligibility,
+            step_native,
+        )
+
+        ineligible_reason = resolve_native_eligibility(planner)
+        if ineligible_reason is None:
+            return await step_native(planner, trajectory)
+        emit_downgrade_once(planner, trajectory, ineligible_reason)
+        # Fall through to the prompted wire format below.
+
     had_pending_steering = bool(trajectory.steering_inputs)
 
     def _consume_steering_inputs() -> None:

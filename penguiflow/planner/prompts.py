@@ -703,6 +703,7 @@ def build_system_prompt(
     current_date: str | None = None,
     tool_examples: ToolExamplesConfig | None = None,
     structured_final_schema: Mapping[str, Any] | None = None,
+    tool_call_mode: str = "prompted",
 ) -> str:
     """Build comprehensive system prompt for the planner.
 
@@ -762,7 +763,23 @@ Current date: {current_date}
     # ─────────────────────────────────────────────────────────────
     # OUTPUT FORMAT (NON-NEGOTIABLE)
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<output_format>
+    native_mode = tool_call_mode == "native"
+
+    if native_mode:
+        prompt_sections.append("""<output_format>
+You act through provider-native function calling: the tools in your catalog are declared
+to you directly by the API.
+
+- To act, CALL one or more tools (native function calls). Do not describe tool calls in text.
+- To run tools in parallel, emit MULTIPLE tool calls in a single turn.
+- When you have enough information, FINISH by replying with your complete answer as PLAIN TEXT
+  with NO tool calls. Plain text with no tool call IS the final answer shown to the user.
+- Any brief text emitted alongside tool calls is treated as internal reasoning, never shown
+  to the user.
+- Never emit a JSON action envelope (no next_node/args wrapper) - call tools natively instead.
+</output_format>""")
+    else:
+        prompt_sections.append("""<output_format>
 Think briefly (internally), then respond with a single JSON object that matches the PlannerAction schema.
 If a tool would help, set "next_node" to the tool name and provide "args".
 Write your JSON inside one markdown code block (```json ... ```).
@@ -778,7 +795,8 @@ Important:
     # ─────────────────────────────────────────────────────────────
     # ACTION SCHEMA
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<action_schema>
+    if not native_mode:
+        prompt_sections.append("""<action_schema>
 Every response follows this structure:
 
 {
@@ -839,7 +857,17 @@ Remember: The ONLY place for user-facing text is args.answer when next_node is "
     # ─────────────────────────────────────────────────────────────
     # FINISHING (CRITICAL)
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<finishing>
+    if native_mode:
+        prompt_sections.append("""<finishing>
+When you have gathered enough information to answer the query, reply with your complete,
+human-readable answer as plain text and make NO tool calls in that turn.
+
+- Write a full, helpful response - not a summary or fragment.
+- Do NOT wrap the answer in JSON or markdown code fences.
+- Do NOT announce that you are finished - just give the answer.
+</finishing>""")
+    else:
+        prompt_sections.append("""<finishing>
 When you have gathered enough information to answer the query:
 
 1. Set "next_node" to "final_response"
@@ -874,7 +902,7 @@ Example finish:
     # ─────────────────────────────────────────────────────────────
     # STRUCTURED FINAL RESPONSE (opt-in via final_response_model)
     # ─────────────────────────────────────────────────────────────
-    if structured_final_schema is not None:
+    if structured_final_schema is not None and not native_mode:
         schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
         prompt_sections.append(f"""<structured_final_response>
 When finishing (next_node "final_response"), args MUST ALSO include a "structured" object that
@@ -918,7 +946,14 @@ Rules for using tools:
     # ─────────────────────────────────────────────────────────────
     # PARALLEL EXECUTION
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<parallel_execution>
+    if native_mode:
+        prompt_sections.append("""<parallel_execution>
+To run independent tools concurrently, emit multiple native tool calls in ONE turn.
+Use this when multiple independent data sources or queries are needed and ordering
+does not matter. Do not emit dependent calls in the same turn - wait for results.
+</parallel_execution>""")
+    else:
+        prompt_sections.append("""<parallel_execution>
 For tasks that benefit from concurrent execution, use parallel plans:
 
 {

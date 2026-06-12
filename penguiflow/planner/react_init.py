@@ -92,6 +92,7 @@ def init_react_planner(
     stream_final_response: bool = False,
     final_response_model: type[BaseModel] | None = None,
     final_response_retries: int = 1,
+    tool_call_mode: str = "prompted",
     short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
     background_tasks: BackgroundTasksConfig | None = None,
     error_recovery: ErrorRecoveryConfig | None = None,
@@ -281,6 +282,9 @@ def init_react_planner(
             )
 
     planner._stream_final_response = stream_final_response
+    if tool_call_mode not in ("prompted", "native"):
+        raise ValueError(f"Unknown tool_call_mode {tool_call_mode!r}; expected 'prompted' or 'native'")
+    planner._tool_call_mode = tool_call_mode
     planner._final_response_model = final_response_model
     planner._final_response_retries = final_response_retries
     planner._final_response_schema = None
@@ -435,6 +439,7 @@ def init_react_planner(
         planning_hints=hints_payload,
         tool_examples=tool_examples_config,
         structured_final_schema=planner._final_response_schema,
+        tool_call_mode=tool_call_mode,
     )
     # Store extra for use in repair prompts (voice/personality context)
     planner._system_prompt_extra = system_prompt_extra

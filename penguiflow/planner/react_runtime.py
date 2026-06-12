@@ -555,6 +555,7 @@ def _apply_visible_catalog(planner: Any, visible_specs: Sequence[NodeSpec]) -> N
         planning_hints=hints_payload,
         tool_examples=getattr(planner, "_tool_examples_config", None),
         structured_final_schema=getattr(planner, "_final_response_schema", None),
+        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
     )
 
     guardrail_context = getattr(planner, "_guardrail_context", None)

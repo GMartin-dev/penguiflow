@@ -27,6 +27,12 @@ class ModelProfile:
     supports_schema_guided_output: bool = False  # Provider-native schema-guided structured output
     supports_json_only_output: bool = True  # Provider-native "JSON only" mode (if supported)
     supports_tools: bool = True  # Tool/function calling
+    # Whether provider-native function calling works on this model's ROUTE
+    # (distinct from supports_tools: the model may support tools while the
+    # serving endpoint rejects native function calling, e.g. Databricks
+    # gpt-5.5 requires the Responses API). Gates the planner's native
+    # tool-calling mode; ineligible models downgrade to prompted mode.
+    supports_native_tool_calls: bool = True
     supports_reasoning: bool = False  # Native reasoning (o1, o3, deepseek-r1)
     supports_streaming: bool = True  # Streaming responses
     supports_image_input: bool = False  # Image content parts in user messages

@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import LLMInvalidRequestError, LLMRateLimitError, is_retryable, is_temperature_error
@@ -30,7 +31,18 @@ from .types import (
     TextPart,
     ToolCallPart,
     ToolResultPart,
+    ToolSpec,
 )
+
+
+@dataclass(slots=True)
+class NativeToolCallResult:
+    """Result of a native tool-calling completion (planner native mode)."""
+
+    content: str
+    tool_calls: list[ToolCallPart] = field(default_factory=list)
+    cost: float = 0.0
+    reasoning_content: str | None = None
 
 logger = logging.getLogger("penguiflow.llm.protocol")
 _REASONING_OFF_VALUES = frozenset({"off", "none", "false", "0", "disable", "disabled", "no"})
@@ -659,6 +671,167 @@ class NativeLLMAdapter:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+
+    async def complete_with_tools(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[ToolSpec],
+        stream: bool = False,
+        on_stream_chunk: Callable[[str, bool], None] | None = None,
+        on_reasoning_chunk: Callable[[str, bool], None] | None = None,
+    ) -> NativeToolCallResult:
+        """Execute a completion with provider-native tool declarations.
+
+        Additive surface for the planner's native tool-calling mode --
+        ``JSONLLMClient.complete()`` is untouched. Content streams via
+        ``on_stream_chunk`` (the planner decides which channel it belongs
+        to); tool-call fragment assembly is the provider's job and the
+        assembled calls are returned, never streamed.
+        """
+        if self._trace_sink is None:
+            return await self._complete_with_tools_inner(
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                on_stream_chunk=on_stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+            )
+        call = LLMCallSpan(
+            provider=self._provider.provider_name,
+            model=self._provider.model,
+            stream=stream,
+            response_format_kind="native_tools",
+        )
+        with self._trace_sink.span(call):
+            result = await self._complete_with_tools_inner(
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                on_stream_chunk=on_stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+                _trace_call=call,
+            )
+            call.content_chars = len(result.content)
+            call.cost_usd = result.cost
+            return result
+
+    async def _complete_with_tools_inner(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[ToolSpec],
+        stream: bool = False,
+        on_stream_chunk: Callable[[str, bool], None] | None = None,
+        on_reasoning_chunk: Callable[[str, bool], None] | None = None,
+        _trace_call: LLMCallSpan | None = None,
+    ) -> NativeToolCallResult:
+        llm_messages = _prepare_messages_for_provider(
+            provider_name=self._provider.provider_name,
+            model=self._provider.model,
+            messages=self._convert_messages(messages),
+        )
+        self._validate_multimodal_parts(llm_messages)
+
+        extra: dict[str, Any] | None = None
+        if self._reasoning_effort is not None:
+            extra = {"reasoning_effort": self._reasoning_effort}
+
+        request = LLMRequest(
+            model=self._provider.model,
+            messages=tuple(llm_messages),
+            tools=tuple(tools),
+            temperature=self._temperature,
+            extra=extra,
+        )
+
+        streaming_active = stream and self._streaming_enabled and on_stream_chunk is not None
+        saw_reasoning_delta = False
+        stream_callback: StreamCallback | None = None
+        if streaming_active:
+
+            def stream_callback_wrapper(event: StreamEvent) -> None:
+                nonlocal saw_reasoning_delta
+                if event.delta_text and on_stream_chunk is not None:
+                    on_stream_chunk(event.delta_text, False)
+                if event.delta_reasoning and on_reasoning_chunk is not None:
+                    saw_reasoning_delta = True
+                    on_reasoning_chunk(event.delta_reasoning, False)
+
+            stream_callback = stream_callback_wrapper
+
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries):
+            if _trace_call is not None:
+                _trace_call.attempts = attempt + 1
+            try:
+                response = await self._provider.complete(
+                    request,
+                    timeout_s=self._timeout_s,
+                    stream=streaming_active,
+                    on_stream_event=stream_callback,
+                )
+
+                cost = 0.0
+                if response.usage:
+                    cost = calculate_cost(
+                        self._provider.model,
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                    )
+                    if _trace_call is not None:
+                        _trace_call.input_tokens = response.usage.input_tokens
+                        _trace_call.output_tokens = response.usage.output_tokens
+
+                if streaming_active:
+                    if on_reasoning_chunk is not None and response.reasoning_content and not saw_reasoning_delta:
+                        on_reasoning_chunk(response.reasoning_content, False)
+                    if on_stream_chunk is not None:
+                        on_stream_chunk("", True)
+                    if on_reasoning_chunk is not None:
+                        on_reasoning_chunk("", True)
+
+                return NativeToolCallResult(
+                    content=response.message.text,
+                    tool_calls=list(response.message.tool_calls),
+                    cost=cost,
+                    reasoning_content=response.reasoning_content,
+                )
+            except Exception as e:
+                last_error = e
+
+                if (
+                    is_temperature_error(e)
+                    and not self._provider.temperature_unsupported
+                    and attempt < self._max_retries - 1
+                ):
+                    self._provider.mark_temperature_unsupported()
+                    logger.warning(
+                        "llm_temperature_unsupported_recovered",
+                        extra={"provider": self._provider.provider_name, "model": self._provider.model},
+                    )
+                    continue
+
+                retryable = is_retryable(e)
+                if isinstance(e, LLMRateLimitError) and not self._retry_rate_limit_errors:
+                    retryable = False
+                if retryable and attempt < self._max_retries - 1:
+                    backoff_s = 2**attempt
+                    logger.warning(
+                        f"Native tool-call adapter error: {e}",
+                        extra={
+                            "provider": self._provider.provider_name,
+                            "attempt": attempt + 1,
+                            "max_retries": self._max_retries,
+                            "backoff_s": backoff_s,
+                        },
+                    )
+                    await asyncio.sleep(backoff_s)
+                    continue
+                raise
+
+        msg = f"Native tool-call LLM call failed after {self._max_retries} retries"
+        raise RuntimeError(msg) from last_error
 
     def _convert_messages(self, messages: Sequence[Mapping[str, Any]]) -> list[LLMMessage]:
         """Convert dict messages to LLMMessage format."""
