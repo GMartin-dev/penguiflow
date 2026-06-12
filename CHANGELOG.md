@@ -17,6 +17,19 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   (Databricks rejects the parameter for this model — live-verified).
 
 ### Added
+- **Native tool-calling planner mode (opt-in)**: `ReactPlanner(tool_call_mode="native")`
+  expresses tool intent through provider-native function calls instead of the prompted
+  `{next_node, args}` JSON envelope — same `PlannerAction` decision shape, so parallel
+  fanout, trajectory, events, pause/resume, and A2A are unchanged. Content-only turns
+  finish the run; N tool calls in one turn map to the existing parallel plan; catalog
+  names are declared under wire-safe aliases (MCP dotted names are rejected by provider
+  function-name rules). Eligibility is profile-gated (`supports_native_tool_calls`;
+  the Databricks gpt-5.5 route is gated) with per-run downgrade-to-prompted events,
+  and structured final answers compose via one extraction turn. Streaming: tool-turn
+  content streams live on the thinking channel; the final answer flushes to the answer
+  channel on completion. New `NativeLLMAdapter.complete_with_tools()` /
+  `FallbackLLMClient.complete_with_tools()` (shared 429-failover core). Default
+  `"prompted"` — byte-identical behavior when unset.
 - **Multimodal planner inputs (opt-in)**: `AudioPart` joins `ImagePart`, and
   `ReactPlanner.run(..., input_parts=[...])` appends image/audio parts to the
   initial user message while preserving text-only byte parity when omitted.
