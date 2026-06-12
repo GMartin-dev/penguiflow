@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penguiflow"
-version = "3.11.0a3"
+version = "3.11.0a4"
 description = "Async-first orchestration library for multi-agent and data pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -50,6 +50,9 @@ dev = [
     "anthropic>=0.75.0",
     "google-genai>=1.57.0",
     "boto3>=1.42.0",
+    # pydantic-ai transport tests
+    "pydantic-ai-slim[openai,openrouter]>=1.107.0,<2",
+    "genai-prices>=0.0.66,<1",
 ]
 docs = [
     "mkdocs>=1.6",
