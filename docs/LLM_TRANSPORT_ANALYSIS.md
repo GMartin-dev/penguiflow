@@ -1,12 +1,12 @@
 # LLM Transport Consolidation — Analysis & Branch Plan (3.11 line)
 
 > Branch: `release/3.11` (integration branch; feature branches PR into it)
-> Status: revision 3. Phase 0 spike pending; the tracing half of Phase 4
-> landed in `3.11.0a1` (`penguiflow/llm/tracing.py`). Revision 3 pulls the
+> Status: revision 3. Phase 0 spike executed; Phase 1, Phase 2, Phase 3, and
+> Phase 4 shipped on the 3.11 line. Revision 3 pulls the
 > native tool-calling planner mode into scope as Phase 5 (was "future").
 > Supersedes: the initial liter-llm-only analysis (revision 1) and the
 > tool-calling-out-of-scope plan (revision 2).
-> Last updated: 2026-06-11
+> Last updated: 2026-06-12
 
 This document analyzes consolidating PenguiFlow's LLM transport — today a
 hand-maintained native provider layer (7 providers) plus a legacy `litellm`
@@ -317,7 +317,10 @@ hardening for the providers we keep:
    database) replaces our hand-maintained pricing tables as the source of
    truth for both the native providers and the transport; our
    `calculate_cost`/`register_pricing` API stays as the stable facade
-   (override-capable for private Databricks rates).
+   (override-capable for private Databricks rates). Shipped as an optional
+   `penguiflow[pricing]` extra and explicitly included in
+   `penguiflow[pydantic-ai]`; imports are lazy, and core falls back to the
+   static table when the package is absent.
 3. **Auto-trace at the adapter edge, transport-agnostic.** One OTel
    GenAI-semconv span per `Provider.complete()` /
    `JSONLLMClient.complete()` call (model, tokens, cost, latency,
@@ -503,8 +506,10 @@ Throwaway harness (not shipped) driving `pydantic-ai-slim==1.107.0` via
 - [x] **`genai-prices`** — opus-4-7 ($5/$25) and gpt-5-4-mini ($0.75/$4.50)
       match our tables exactly; **opus-4-8 $5/$25 independently confirms the
       3.10.1 assumed pricing**; discrepancy flagged on sonnet-4-5 ($6/$22.50
-      vs our $3/$15 — possibly the long-context tier; investigate before
-      Phase 4 adoption).
+      vs our $3/$15) was resolved in Phase 4 as tiered pricing behavior:
+      base 1K-token usage returns $3/$15 per MTok, while >200K-token usage
+      enters the long-context tier ($6/$22.50 per MTok for Sonnet 4.5 in the
+      bundled snapshot).
 - [x] **Dependency audit** — `pydantic-ai-slim[openai,openrouter]` +
       `genai-prices`: 30 packages standalone; resolves cleanly alongside
       penguiflow's full dev set (124 total, zero conflicts). Confirmed hard
@@ -585,14 +590,46 @@ to keep the native Databricks provider.
   audio validation remains deferred because the available key set has no
   audio-capable route.
 
-### Phase 4 — Cost + trace automation
+### Phase 4 — Cost + trace automation — **SHIPPED**
 
 - ~~Trace seam~~ **landed in 3.11.0a1**: `penguiflow/llm/tracing.py` —
   pluggable `LLMTraceSink` at the `NativeLLMAdapter.complete()` seam (covers
   every transport and every `FallbackLLMClient` adapter), with
   `MlflowLLMTraceSink` (MLflow Tracing spans) and `LoggingLLMTraceSink`;
   transparent enablement via `PENGUIFLOW_LLM_TRACING=mlflow|log`.
-- Remaining: `genai-prices` behind the pricing facade; MLflow example.
+- **Cost automation shipped**: `genai-prices>=0.0.66,<1` is now the source of
+  truth behind the existing `penguiflow.llm.pricing` facade. Public API stays
+  frozen (`calculate_cost`, `calculate_cost_from_usage`, `get_pricing`,
+  `register_pricing`); resolution order is registered override →
+  `genai-prices` candidate lookup → static fallback table → existing warning
+  and `(0.0, 0.0)`. Exact static free-tier entries keep their prior zero-cost
+  behavior to avoid broad upstream prefix matches changing defaults.
+- **Normalization shipped**: slash providers are peeled from left to right
+  (`openrouter/openai/gpt-5.3-chat` → `openai/gpt-5.3-chat` →
+  `gpt-5.3-chat`), dotted IDs keep hyphenated aliases, and Databricks endpoint
+  prefixes are tried stripped (`databricks-gpt-5-4-mini` →
+  `gpt-5-4-mini`).
+- **Tiered-price handling shipped**: `get_pricing()` returns the facade's
+  historical base per-1K rates using a 1K synthetic usage; `calculate_cost()`
+  and `calculate_cost_from_usage()` use the actual usage through
+  `genai-prices.calc_price()`, so long-context tiering is applied when token
+  counts cross the upstream thresholds.
+- **Sonnet 4.5 finding resolved**: Anthropic's current public pricing page
+  lists Claude Sonnet 4.5 base pricing at $3 input / $15 output per MTok;
+  `genai-prices` also returns that base rate for 1K usage. The spike's
+  $6/$22.50 figure came from pricing a 1M-token synthetic request, which hits
+  the bundled Sonnet 4.5 long-context tier above 200K input tokens. No static
+  base-table correction was required.
+- **Example shipped**: `examples/mlflow_llm_tracing/` is runnable via
+  `uv run python examples/mlflow_llm_tracing/flow.py`, supports
+  `PENGUIFLOW_LLM_TRACING=mlflow`, includes a deterministic scripted path and
+  a live Databricks mode (`PENGUIFLOW_PHASE4_LIVE=1`), and has an integration
+  test scenario.
+- **Validation shipped**: unit tests cover override precedence, upstream over
+  static, static fallback when `genai-prices` is absent, Databricks prefix
+  normalization, production model parity
+  (`databricks-claude-opus-4-7/4-8`, `databricks-gpt-5-5`,
+  `databricks-gpt-5-4-mini`), and tiered Sonnet 4.5 actual-cost calculation.
 
 ### Phase 5 — Native tool-calling planner mode (opt-in)
 

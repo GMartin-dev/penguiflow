@@ -61,6 +61,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `PENGUIFLOW_LLM_TRACING=mlflow` (or `log`) — no agent code changes, no message
   contents captured, default behavior unchanged when unset. The seam sits above
   the `Provider` abstraction, so future transports are traced identically.
+- LLM cost automation: the existing `penguiflow.llm.pricing` facade now uses
+  optional `genai-prices` as the maintained price source before falling back to
+  the static table. `register_pricing()` remains the highest-priority override
+  for private rates, `calculate_cost()` uses actual token counts so upstream
+  tiered pricing applies, and `get_pricing()` keeps the historical base per-1K
+  return shape. Added the `penguiflow[pricing]` extra and included
+  `genai-prices` explicitly in `penguiflow[pydantic-ai]`.
+- `examples/mlflow_llm_tracing/`, a runnable ReactPlanner example showing
+  `PENGUIFLOW_LLM_TRACING=mlflow|log` spans alongside cost figures from the new
+  pricing path and a private-rate override check.
 - `databricks-claude-opus-4-8` model profile and pricing entries.
 - Model profiles for GPT-5.5 / GPT-5.5 Pro, Gemini 3.5 Flash, and Claude Opus 4.7,
   plus their Databricks variants (`databricks-gpt-5-5`, `databricks-gpt-5-5-pro`,
