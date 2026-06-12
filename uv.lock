@@ -3180,7 +3180,11 @@ planner = [
     { name = "utcp" },
     { name = "utcp-http" },
 ]
+pricing = [
+    { name = "genai-prices" },
+]
 pydantic-ai = [
+    { name = "genai-prices" },
     { name = "pydantic-ai-slim", extra = ["openai", "openrouter"] },
 ]
 tools-cli = [
@@ -3202,6 +3206,7 @@ dev = [
     { name = "boto3" },
     { name = "coverage", extra = ["toml"] },
     { name = "fastapi" },
+    { name = "genai-prices" },
     { name = "google-genai" },
     { name = "googleapis-common-protos" },
     { name = "grpcio" },
@@ -3247,6 +3252,8 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'cli'", specifier = ">=0.118" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.118" },
     { name = "fastmcp", marker = "extra == 'planner'", specifier = ">=3.0" },
+    { name = "genai-prices", marker = "extra == 'pricing'", specifier = ">=0.0.66,<1" },
+    { name = "genai-prices", marker = "extra == 'pydantic-ai'", specifier = ">=0.0.66,<1" },
     { name = "google-genai", marker = "extra == 'a2a-grpc'", specifier = ">=1.57.0" },
     { name = "google-genai", marker = "extra == 'dev'", specifier = ">=1.57.0" },
     { name = "google-genai", marker = "extra == 'llm'", specifier = ">=1.57.0" },
@@ -3295,7 +3302,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'cli'", specifier = ">=0.32" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.32" },
 ]
-provides-extras = ["dev", "docs", "cli", "a2a-server", "a2a-grpc", "a2a-client", "planner", "web", "llm", "tools-cli", "tools-websocket", "pydantic-ai"]
+provides-extras = ["dev", "docs", "cli", "a2a-server", "a2a-grpc", "a2a-client", "planner", "web", "llm", "tools-cli", "tools-websocket", "pricing", "pydantic-ai"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3305,6 +3312,7 @@ dev = [
     { name = "boto3", specifier = ">=1.42.0" },
     { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
     { name = "fastapi", specifier = ">=0.118" },
+    { name = "genai-prices", specifier = ">=0.0.66,<1" },
     { name = "google-genai", specifier = ">=1.57.0" },
     { name = "googleapis-common-protos", specifier = ">=1.66.0" },
     { name = "grpcio", specifier = ">=1.70.0" },
