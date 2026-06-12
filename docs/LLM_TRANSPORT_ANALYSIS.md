@@ -792,9 +792,26 @@ with adaptive thinking DO return `{"type": "reasoning", "summary":
 [{"type": "summary_text", "text": "", "signature": "<encrypted blob>"}]}`
 blocks — the model thinks, but the route REDACTS the content: empty
 `summary_text`, signature only (the signature exists for thinking-integrity
-round-trips). There is no `output_config.summary` knob (400 "Extra inputs
-are not permitted"); `thinking.type.enabled` stays rejected on 4.8. Our
-parser is correct; there is nothing visible to render on this route today.
+round-trips). Verified across: both endpoint paths (`/{model}/invocations`
+AND `/chat/completions`), stream + non-stream, Opus 4.7 AND 4.8, effort
+low/high/max — the signature blob scales ~9x with effort (1.9KB → 16.7KB)
+while visible text stays zero, so effort is ruled out. There is no
+`output_config.summary` knob (400 "Extra inputs are not permitted");
+`thinking.type.enabled` stays rejected on 4.8. Our parser is correct;
+nothing visible arrives **on the dev workspace** today.
+
+**UNRESOLVED — production contradiction (2026-06-12):** a production 3.10
+deployment reportedly shows thinking for Databricks Opus 4.7. Two surviving
+hypotheses after the probe matrix above: (a) the prod workspace/serving
+endpoint is configured differently and exposes thinking summaries; (b) what
+prod renders as "thinking" is not native extended thinking at all but the
+prompted-mode thought channel (the `_StreamingThoughtExtractor` streams a
+JSON `thought` field, and `PlannerEvent.thought` rides step events).
+Discriminate with ONE prod sample: the event/channel name carrying the
+visible thinking text (native reasoning arrives as `llm_stream_chunk`
+channel `thinking` sourced from provider reasoning deltas; extractor
+thought arrives with `phase="observation"` from the JSON envelope), or a
+raw response body from the prod workspace.
 The provider now logs `databricks_reasoning_redacted_by_route` (once per
 stream) when redacted blocks are detected, so this is observable instead of
 re-investigated. Visible reasoning works wherever routes expose it (e.g.
