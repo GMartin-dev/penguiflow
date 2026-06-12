@@ -29,6 +29,8 @@ class ModelProfile:
     supports_tools: bool = True  # Tool/function calling
     supports_reasoning: bool = False  # Native reasoning (o1, o3, deepseek-r1)
     supports_streaming: bool = True  # Streaming responses
+    supports_image_input: bool = False  # Image content parts in user messages
+    supports_audio_input: bool = False  # Audio content parts in user messages
     # Whether the model accepts an explicit `temperature` value. False for
     # models that reject the parameter (e.g. Databricks GPT-5 reasoning models
     # accept only the default; databricks-claude-opus-4-7 rejects it outright).

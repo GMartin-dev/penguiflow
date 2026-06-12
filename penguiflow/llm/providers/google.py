@@ -28,6 +28,7 @@ from ..errors import (
 from ..profiles import ModelProfile, get_profile
 from ..types import (
     CompletionResponse,
+    ContentPart,
     ImagePart,
     LLMMessage,
     LLMRequest,
@@ -228,9 +229,7 @@ class GoogleProvider(Provider):
             ) from e
 
         # Build final message
-        out_parts: list[TextPart | ToolCallPart | ToolResultPart | ImagePart] = (
-            [TextPart(text=full_text)] if full_text else []
-        )
+        out_parts: list[ContentPart] = [TextPart(text=full_text)] if full_text else []
 
         on_stream_event(StreamEvent(done=True, usage=usage, finish_reason=finish_reason))
 
@@ -400,7 +399,7 @@ class GoogleProvider(Provider):
 
     def _from_google_response(self, response: GenerateContentResponse) -> CompletionResponse:
         """Convert Google GenerateContentResponse to CompletionResponse."""
-        parts: list[TextPart | ToolCallPart | ToolResultPart | ImagePart] = []
+        parts: list[ContentPart] = []
         reasoning_acc: list[str] = []
 
         if response.candidates:

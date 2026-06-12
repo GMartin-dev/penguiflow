@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from penguiflow.catalog import build_catalog, tool
+from penguiflow.llm.types import ImagePart, TextPart
 from penguiflow.node import Node
 from penguiflow.planner import PlannerEvent, PlannerPause, ReactPlanner
 from penguiflow.planner.guardrails import GuardrailAction, GuardrailDecision, RetrySpec
@@ -251,12 +252,12 @@ async def cached(args: Intent, ctx: object) -> Documents:
 class StubClient:
     def __init__(self, responses: list[Mapping[str, object]]) -> None:
         self._responses = [json.dumps(item) for item in responses]
-        self.calls: list[list[Mapping[str, str]]] = []
+        self.calls: list[list[Mapping[str, Any]]] = []
 
     async def complete(
         self,
         *,
-        messages: list[Mapping[str, str]],
+        messages: list[Mapping[str, Any]],
         response_format: Mapping[str, object] | None = None,
         stream: bool = False,
         on_stream_chunk: object = None,
@@ -270,12 +271,12 @@ class StubClient:
 
 class SummarizerStub:
     def __init__(self) -> None:
-        self.calls: list[list[Mapping[str, str]]] = []
+        self.calls: list[list[Mapping[str, Any]]] = []
 
     async def complete(
         self,
         *,
-        messages: list[Mapping[str, str]],
+        messages: list[Mapping[str, Any]],
         response_format: Mapping[str, object] | None = None,
         stream: bool = False,
         on_stream_chunk: object = None,
@@ -301,12 +302,12 @@ class CostStubClient:
 
     def __init__(self, responses: list[tuple[Mapping[str, object], float]]) -> None:
         self._responses = [(json.dumps(payload, ensure_ascii=False), float(cost)) for payload, cost in responses]
-        self.calls: list[list[Mapping[str, str]]] = []
+        self.calls: list[list[Mapping[str, Any]]] = []
 
     async def complete(
         self,
         *,
-        messages: list[Mapping[str, str]],
+        messages: list[Mapping[str, Any]],
         response_format: Mapping[str, object] | None = None,
         stream: bool = False,
         on_stream_chunk: object = None,
@@ -1793,6 +1794,38 @@ async def test_react_planner_compacts_history_when_budget_exceeded() -> None:
 
     assert result.reason == "answer_complete"
     assert any(msg["role"] == "system" and "Trajectory summary" in msg["content"] for msg in client.calls[1])
+
+
+@pytest.mark.asyncio()
+async def test_react_planner_input_parts_survive_messages_and_summary() -> None:
+    client = StubClient(
+        [
+            {
+                "thought": "triage",
+                "next_node": "triage",
+                "args": {"question": "What is in the image?"},
+            },
+            {"thought": "finish", "next_node": None, "args": {"raw_answer": "done"}},
+        ]
+    )
+    planner = make_planner(client, token_budget=120)
+    image_bytes = b"\x89PNG\r\nphase3"
+
+    result = await planner.run(
+        "Describe the image",
+        input_parts=[ImagePart(data=image_bytes, media_type="image/png", detail="low")],
+    )
+
+    assert result.reason == "answer_complete"
+    first_user = next(msg for msg in client.calls[0] if msg["role"] == "user")
+    assert isinstance(first_user["content"], list)
+    assert isinstance(first_user["content"][0], TextPart)
+    assert isinstance(first_user["content"][1], ImagePart)
+    summary_message = next(msg for msg in client.calls[1] if "Trajectory summary" in str(msg["content"]))
+    summary_text = str(summary_message["content"])
+    assert "image/png" in summary_text
+    assert "bytes" in summary_text
+    assert "phase3" not in summary_text
 
 
 @pytest.mark.asyncio()

@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ValidationError
 
 from ..catalog import NodeSpec, ToolLoadingMode
+from ..llm.types import ContentPart
 from ..rich_output.tools import RICH_OUTPUT_RENDER_TOOL_NAMES
 from ..skills.models import SkillQuery
 from ..skills.provider import build_skill_capability_context
@@ -961,6 +962,7 @@ async def run(
     planner: Any,
     query: str,
     *,
+    input_parts: Sequence[ContentPart] | None = None,
     llm_context: Mapping[str, Any] | None = None,
     context_meta: Mapping[str, Any] | None = None,
     tool_context: Mapping[str, Any] | None = None,
@@ -995,6 +997,7 @@ async def run(
         query=query,
         llm_context=cleaned_llm_context,
         tool_context=normalised_tool_context,
+        input_parts=tuple(input_parts or ()),
     )
     if extracted_results:
         trajectory.background_results.update(extracted_results)

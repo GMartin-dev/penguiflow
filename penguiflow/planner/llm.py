@@ -13,6 +13,7 @@ from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel
 
+from ..llm.types import TextPart
 from . import prompts
 from .models import (
     ClarificationResponse,
@@ -576,7 +577,7 @@ class _LiteLLMJSONClient:
     async def complete(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
         stream: bool = False,
         on_stream_chunk: Callable[[str, bool], None] | None = None,
@@ -916,14 +917,14 @@ class _LiteLLMJSONClient:
         raise RuntimeError(msg) from last_error
 
 
-def _estimate_size(messages: Sequence[Mapping[str, str]]) -> int:
+def _estimate_size(messages: Sequence[Mapping[str, Any]]) -> int:
     """Estimate token count for messages."""
 
     total_chars = 0
     for item in messages:
         content = item.get("content", "")
         role = item.get("role", "")
-        total_chars += len(content)
+        total_chars += len(content) if isinstance(content, str) else len(str(content))
         total_chars += len(role) + 20
     estimated_tokens = int(total_chars / 3.5)
     logger.debug(
@@ -933,7 +934,7 @@ def _estimate_size(messages: Sequence[Mapping[str, str]]) -> int:
     return estimated_tokens
 
 
-async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str, str]]:
+async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str, Any]]:
     llm_context = trajectory.llm_context
     conversation_memory = None
     external_memory = None
@@ -1056,7 +1057,7 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
             or system_prompt
         )
 
-    messages: list[dict[str, str]] = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
     if external_memory is not None:
@@ -1073,19 +1074,16 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
                 "content": prompts.render_read_only_conversation_memory(conversation_memory),
             }
         )
-    messages.extend(
-        [
-            {
-                "role": "user",
-                "content": prompts.build_user_prompt(
-                    trajectory.query,
-                    llm_context,
-                ),
-            },
-        ]
+    user_prompt = prompts.build_user_prompt(
+        trajectory.query,
+        llm_context,
     )
+    user_content: Any = user_prompt
+    if trajectory.input_parts:
+        user_content = [TextPart(text=user_prompt), *trajectory.input_parts]
+    messages.append({"role": "user", "content": user_content})
 
-    history_messages: list[dict[str, str]] = []
+    history_messages: list[dict[str, Any]] = []
     for step in trajectory.steps:
         action_for_llm = {
             "next_node": step.action.next_node,
@@ -1143,7 +1141,7 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
         "role": "system",
         "content": prompts.render_summary(summary.compact()),
     }
-    condensed: list[dict[str, str]] = messages + [summary_message]
+    condensed: list[dict[str, Any]] = messages + [summary_message]
     if trajectory.steps:
         last_step = trajectory.steps[-1]
         last_action_for_llm = {

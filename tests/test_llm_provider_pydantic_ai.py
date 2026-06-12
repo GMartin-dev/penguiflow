@@ -22,6 +22,7 @@ from penguiflow.llm.errors import (
 from penguiflow.llm.profiles import ModelProfile
 from penguiflow.llm.providers.pydantic_ai import PydanticAIProvider
 from penguiflow.llm.types import (
+    AudioPart,
     CancelToken,
     ImagePart,
     LLMMessage,
@@ -158,6 +159,18 @@ class TestMessageMapping:
         assert content[0] == "what color?"
         assert isinstance(content[1], pai_messages.BinaryContent)
         assert content[1].media_type == "image/png"
+
+    def test_audio_parts_become_binary_content(self) -> None:
+        provider = _provider()
+        message = LLMMessage(
+            role="user",
+            parts=[TextPart(text="transcribe"), AudioPart(data=b"RIFF", media_type="audio/wav")],
+        )
+        content = provider._to_user_content(message)
+        assert isinstance(content, list)
+        assert content[0] == "transcribe"
+        assert isinstance(content[1], pai_messages.BinaryContent)
+        assert content[1].media_type == "audio/wav"
 
     def test_text_only_user_content_is_plain_string(self) -> None:
         provider = _provider()

@@ -154,7 +154,8 @@ Supporting machinery that encodes hard-won production knowledge:
 ### 3.3 What already exists but is dormant
 
 - `ImagePart` exists in `penguiflow/llm/types.py` (`ContentPart = TextPart |
-  ToolCallPart | ToolResultPart | ImagePart`) but the planner path is
+  ToolCallPart | ToolResultPart | ImagePart`; Phase 3 adds `AudioPart`) but
+  the planner path is
   text-only: `NativeLLMAdapter._convert_messages()`
   (`penguiflow/llm/protocol.py:552`) maps `{"role", "content"}` dicts to a
   single `TextPart`.
@@ -408,7 +409,8 @@ principles we adopt here rather than re-derive:
    `Sequence[Mapping[str, str]]` → `Sequence[Mapping[str, Any]]`
    (parameter-type widening — non-breaking). Profile capability flags
    (`supports_image_input`, `supports_audio_input`) fail loudly; 32 KB
-   inline-data threshold at the adapter edge.
+   default inline-data threshold at the adapter edge, configurable via
+   `multimodal_inline_data_limit_bytes`.
 7. **Cost + trace automation per §6** ships regardless of transport outcome:
    `genai-prices` behind the existing pricing facade; OTel GenAI-semconv
    spans at the adapter seam through existing hooks.
@@ -557,14 +559,31 @@ to keep the native Databricks provider.
   live via a misconfigured client (repair attempt → degraded event → run
   completes with warning).
 
-### Phase 3 — Multimodal inputs (provider-agnostic)
+### Phase 3 — Multimodal inputs (provider-agnostic) — **SHIPPED**
 
 - `AudioPart`; planner-level input parts; message widening per Decision 6;
   capability flags on kept-native + transport providers; threshold
-  enforcement.
+  enforcement (`multimodal_inline_data_limit_bytes`, default 32 KiB).
+- Planner input surface: `ReactPlanner.run(query, input_parts=...)`, where
+  `input_parts` is an optional sequence of `ImagePart | AudioPart`. The
+  string `query` remains the textual user request and keeps today's default
+  behavior byte-for-byte when omitted. Parts are appended to the initial user
+  message only (not `llm_context`, not tool context, not every repair turn),
+  so the planner trajectory can preserve a typed stub while summaries render
+  only metadata (`type`, `media_type`, `bytes`) and never inline binary data.
+  Resume remains text-only in Phase 3; multimodal follow-up turns can be added
+  later with the same message-part contract.
 - Tests: parts survive the planner trajectory (incl. trajectory summarization
   — parts must be summarized/stubbed, never inlined); loud failure on
   unsupported provider; threshold violation.
+- Live validation: Databricks Claude image round-trip passed through the full
+  `ReactPlanner` + adapter stack on both transports (`native` and
+  `pydantic-ai`) using `databricks/databricks-claude-opus-4-7`. OpenRouter
+  native planner smoke passed after loading `.env` with last-key-wins
+  semantics (the file contains duplicate `OPENROUTER_API_KEY` entries). Audio
+  mapping is implemented and unit-tested via pydantic-ai `BinaryContent`; live
+  audio validation remains deferred because the available key set has no
+  audio-capable route.
 
 ### Phase 4 — Cost + trace automation
 

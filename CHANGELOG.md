@@ -17,6 +17,19 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   (Databricks rejects the parameter for this model — live-verified).
 
 ### Added
+- **Multimodal planner inputs (opt-in)**: `AudioPart` joins `ImagePart`, and
+  `ReactPlanner.run(..., input_parts=[...])` appends image/audio parts to the
+  initial user message while preserving text-only byte parity when omitted.
+  `JSONLLMClient.messages` is widened to `Sequence[Mapping[str, Any]]`;
+  `NativeLLMAdapter` accepts typed content parts, enforces
+  `ModelProfile.supports_image_input` / `supports_audio_input`, and rejects
+  inline binary data over the adapter's configurable
+  `multimodal_inline_data_limit_bytes` limit (default 32 KiB) before provider
+  serialization. Trajectory serialization and summarization keep metadata
+  stubs only, never raw bytes. Databricks/OpenRouter native image paths and
+  pydantic-ai image/audio `BinaryContent` mapping are wired; Databricks Claude
+  image E2E passed through both native and pydantic-ai transports. Audio live
+  validation is deferred until an audio-capable route is available.
 - **Structured final answers (opt-in)**: `ReactPlanner(final_response_model=MyModel)`
   makes the planner's final response carry a `structured` payload validated against
   the supplied Pydantic model. On validation failure a bounded corrective turn

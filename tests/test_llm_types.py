@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from penguiflow.llm.types import (
+    AudioPart,
     CancelToken,
     CompletionResponse,
     Cost,
@@ -70,6 +71,14 @@ class TestImagePart:
     def test_with_detail(self) -> None:
         part = ImagePart(data=b"", media_type="image/jpeg", detail="high")
         assert part.detail == "high"
+
+
+class TestAudioPart:
+    def test_create(self) -> None:
+        data = b"RIFF"
+        part = AudioPart(data=data, media_type="audio/wav")
+        assert part.data == data
+        assert part.media_type == "audio/wav"
 
 
 class TestLLMMessage:
@@ -289,3 +298,9 @@ class TestStripMarkdownFences:
         text = '  ```json\n  {"test": 1}  \n```  '
         result = strip_markdown_fences(text)
         assert "test" in result
+
+
+def test_audio_part_exported_from_llm_package() -> None:
+    from penguiflow.llm import AudioPart as ExportedAudioPart
+
+    assert ExportedAudioPart is AudioPart

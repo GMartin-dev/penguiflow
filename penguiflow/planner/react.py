@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..artifacts import ArtifactScope, ArtifactStore
 from ..catalog import NodeSpec, build_catalog
+from ..llm.types import ContentPart
 from ..node import Node
 from ..registry import ModelRegistry
 from . import prompts
@@ -704,6 +705,7 @@ class ReactPlanner:
         self,
         query: str,
         *,
+        input_parts: Sequence[ContentPart] | None = None,
         llm_context: Mapping[str, Any] | None = None,
         context_meta: Mapping[str, Any] | None = None,  # Deprecated
         tool_context: Mapping[str, Any] | None = None,
@@ -720,6 +722,9 @@ class ReactPlanner:
         llm_context : Mapping[str, Any] | None
             Optional context visible to LLM (memories, status_history, etc.).
             Should NOT include internal metadata like tenant_id or trace_id.
+        input_parts : Sequence[ContentPart] | None
+            Optional image/audio content parts appended to the initial user
+            message. Omitted by default to preserve text-only behavior.
         context_meta : Mapping[str, Any] | None
             **Deprecated**: Use llm_context instead. This parameter is kept for
             backward compatibility but will be removed in a future version.
@@ -755,6 +760,7 @@ class ReactPlanner:
                 async with session_lock:
                     return await session_planner.run(
                         query,
+                        input_parts=input_parts,
                         llm_context=llm_context,
                         context_meta=context_meta,
                         tool_context=tool_context,
@@ -773,6 +779,7 @@ class ReactPlanner:
                 return await _run_impl(
                     self,
                     query,
+                    input_parts=input_parts,
                     llm_context=llm_context,
                     context_meta=context_meta,
                     tool_context=tool_context,
@@ -1001,10 +1008,10 @@ class ReactPlanner:
     def _make_context(self, trajectory: Trajectory) -> _PlannerContext:
         return _PlannerContext(self, trajectory)
 
-    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, str]]:
+    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, Any]]:
         return await build_messages(self, trajectory)
 
-    def _estimate_size(self, messages: Sequence[Mapping[str, str]]) -> int:
+    def _estimate_size(self, messages: Sequence[Mapping[str, Any]]) -> int:
         return _estimate_size(messages)
 
     async def _summarise_trajectory(self, trajectory: Trajectory) -> TrajectorySummary:
