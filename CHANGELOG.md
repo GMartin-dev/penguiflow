@@ -25,9 +25,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   names are declared under wire-safe aliases (MCP dotted names are rejected by provider
   function-name rules). Eligibility is profile-gated (`supports_native_tool_calls`;
   the Databricks gpt-5.5 route is gated) with per-run downgrade-to-prompted events,
-  and structured final answers compose via one extraction turn. Streaming: tool-turn
-  content streams live on the thinking channel; the final answer flushes to the answer
-  channel on completion. New `NativeLLMAdapter.complete_with_tools()` /
+  and structured final answers compose via one extraction turn. Streaming: the final
+  answer streams token-by-token on the answer channel (parity with prompted mode);
+  a disobedient preamble turn closes the stream with a `superseded` marker and
+  re-emits on the thinking channel. New `NativeLLMAdapter.complete_with_tools()` /
   `FallbackLLMClient.complete_with_tools()` (shared 429-failover core). Default
   `"prompted"` — byte-identical behavior when unset.
 - **Multimodal planner inputs (opt-in)**: `AudioPart` joins `ImagePart`, and
