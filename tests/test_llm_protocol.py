@@ -1253,3 +1253,37 @@ class TestNativeLLMAdapterCost:
             content, cost = await adapter.complete(messages=[{"role": "user", "content": "Hello"}])
 
             assert cost == 0.0
+
+    @pytest.mark.asyncio
+    async def test_estimated_cost_in_native_tool_call_mode_when_usage_is_zero(self) -> None:
+        """Native tool-calling should estimate cost when a priced provider returns 0/0 usage."""
+        mock_provider = MagicMock()
+        mock_provider.model = "databricks-claude-opus-4-6"
+        mock_provider.provider_name = "databricks"
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResponse(
+                message=LLMMessage(
+                    role="assistant",
+                    parts=[
+                        ToolCallPart(
+                            name="resolve_analysis_scope",
+                            arguments_json='{"advertiser":"Tubi","period_grain":"quarter","period_value":"2026-Q1"}',
+                            call_id="call_1",
+                        )
+                    ],
+                ),
+                usage=Usage.zero(),
+                reasoning_content="check scope",
+            )
+        )
+
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("databricks-claude-opus-4-6")
+            result = await adapter.complete_with_tools(
+                messages=[{"role": "user", "content": "Analyze Tubi for Q1 2026"}],
+                tools=[],
+            )
+
+            assert result.cost > 0.0

@@ -216,6 +216,60 @@ def _prepare_messages_for_provider(
     return normalized
 
 
+def _estimate_usage_for_costing(
+    *,
+    provider_name: str,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    response_format: Mapping[str, Any] | None,
+    content: str,
+    reasoning_content: str | None,
+    input_tokens: int,
+    output_tokens: int,
+) -> tuple[int, int]:
+    """Best-effort token estimation when a provider returns partial/zero usage.
+
+    Some OpenAI-compatible proxies can return ``0/0`` usage even when pricing is
+    known. Estimating tokens is preferable to silently recording zero cost.
+    """
+    if input_tokens != 0 and output_tokens != 0:
+        return input_tokens, output_tokens
+
+    input_price, output_price = get_pricing(model)
+    if input_price <= 0.0 and output_price <= 0.0:
+        return input_tokens, output_tokens
+
+    estimated_input_tokens = input_tokens
+    estimated_output_tokens = output_tokens
+
+    if estimated_input_tokens == 0:
+        prompt_blob = json.dumps(
+            {
+                "messages": list(messages),
+                "response_format": response_format,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        estimated_input_tokens = max(1, int(len(prompt_blob) / 3.5))
+
+    if estimated_output_tokens == 0:
+        output_blob = content + (reasoning_content or "")
+        if output_blob:
+            estimated_output_tokens = max(1, int(len(output_blob) / 3.5))
+
+    logger.debug(
+        "llm_usage_estimated",
+        extra={
+            "provider": provider_name,
+            "model": model,
+            "estimated_input_tokens": estimated_input_tokens,
+            "estimated_output_tokens": estimated_output_tokens,
+        },
+    )
+    return estimated_input_tokens, estimated_output_tokens
+
+
 class NativeLLMAdapter:
     """Adapter that implements JSONLLMClient protocol using the native LLM layer.
 
@@ -433,40 +487,16 @@ class NativeLLMAdapter:
                 # Calculate cost
                 cost = 0.0
                 if response.usage:
-                    input_tokens = response.usage.input_tokens
-                    output_tokens = response.usage.output_tokens
-
-                    # Best-effort usage fallback: some OpenAI-compatible proxies (and some
-                    # streaming modes) return usage as 0/0 even when pricing is known.
-                    # We approximate token counts from the actual request/response text.
-                    if input_tokens == 0 or output_tokens == 0:
-                        input_price, output_price = get_pricing(self._provider.model)
-                        if input_price > 0.0 or output_price > 0.0:
-                            if input_tokens == 0:
-                                prompt_blob = json.dumps(
-                                    {
-                                        "messages": list(messages),
-                                        "response_format": response_format,
-                                    },
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                )
-                                input_tokens = max(1, int(len(prompt_blob) / 3.5))
-
-                            if output_tokens == 0:
-                                output_blob = content + (response.reasoning_content or "")
-                                if output_blob:
-                                    output_tokens = max(1, int(len(output_blob) / 3.5))
-
-                            logger.debug(
-                                "llm_usage_estimated",
-                                extra={
-                                    "provider": self._provider.provider_name,
-                                    "model": self._provider.model,
-                                    "estimated_input_tokens": input_tokens,
-                                    "estimated_output_tokens": output_tokens,
-                                },
-                            )
+                    input_tokens, output_tokens = _estimate_usage_for_costing(
+                        provider_name=self._provider.provider_name,
+                        model=self._provider.model,
+                        messages=messages,
+                        response_format=response_format,
+                        content=content,
+                        reasoning_content=response.reasoning_content,
+                        input_tokens=response.usage.input_tokens,
+                        output_tokens=response.usage.output_tokens,
+                    )
 
                     cost = calculate_cost(
                         self._provider.model,
@@ -774,14 +804,24 @@ class NativeLLMAdapter:
 
                 cost = 0.0
                 if response.usage:
+                    input_tokens, output_tokens = _estimate_usage_for_costing(
+                        provider_name=self._provider.provider_name,
+                        model=self._provider.model,
+                        messages=messages,
+                        response_format=None,
+                        content=response.message.text,
+                        reasoning_content=response.reasoning_content,
+                        input_tokens=response.usage.input_tokens,
+                        output_tokens=response.usage.output_tokens,
+                    )
                     cost = calculate_cost(
                         self._provider.model,
-                        response.usage.input_tokens,
-                        response.usage.output_tokens,
+                        input_tokens,
+                        output_tokens,
                     )
                     if _trace_call is not None:
-                        _trace_call.input_tokens = response.usage.input_tokens
-                        _trace_call.output_tokens = response.usage.output_tokens
+                        _trace_call.input_tokens = input_tokens
+                        _trace_call.output_tokens = output_tokens
 
                 if streaming_active:
                     if on_reasoning_chunk is not None and response.reasoning_content and not saw_reasoning_delta:

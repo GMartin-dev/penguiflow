@@ -227,4 +227,4 @@ __all__ = [
     "TrajectoryStep",
 ]
 
-__version__ = "3.11.0a4"
+__version__ = "3.11.0a5"
