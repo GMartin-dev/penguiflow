@@ -783,8 +783,22 @@ native path validated** (`final_response_structured_repair_attempt` →
 `validated`, exactly one extraction turn); `databricks/databricks-gpt-5-5` in
 native mode downgraded live with the route reason and completed via prompted
 mode with full token streaming. Reasoning callback path verified by unit
-tests + OpenRouter; Databricks Claude adaptive thinking emits no visible
-deltas (pre-existing route behavior, identical in prompted mode).
+tests + OpenRouter.
+
+**Databricks Claude thinking visibility — settled by raw-wire capture
+(2026-06-12).** Suspicion that we were dropping thinking content was checked
+by dumping the raw route output (no penguiflow parsing): Opus 4.7 AND 4.8
+with adaptive thinking DO return `{"type": "reasoning", "summary":
+[{"type": "summary_text", "text": "", "signature": "<encrypted blob>"}]}`
+blocks — the model thinks, but the route REDACTS the content: empty
+`summary_text`, signature only (the signature exists for thinking-integrity
+round-trips). There is no `output_config.summary` knob (400 "Extra inputs
+are not permitted"); `thinking.type.enabled` stays rejected on 4.8. Our
+parser is correct; there is nothing visible to render on this route today.
+The provider now logs `databricks_reasoning_redacted_by_route` (once per
+stream) when redacted blocks are detected, so this is observable instead of
+re-investigated. Visible reasoning works wherever routes expose it (e.g.
+OpenRouter reasoning deltas, live-verified).
 
 ### Phase 6 — Parity gate, per-family default flips, native shrink
 
