@@ -991,13 +991,14 @@ Use parallel execution when:
     # ─────────────────────────────────────────────────────────────
     # REASONING GUIDANCE
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<reasoning>
+    answer_home = "your final plain-text reply" if native_mode else "args.answer"
+    prompt_sections.append(f"""<reasoning>
 Approach problems systematically:
 
 1. Understand first: Parse the query to identify what's actually being asked
 2. Plan before acting: Consider which tools will help and in what order
 3. Gather evidence: Use tools to collect relevant information
-4. Synthesize: Combine observations into a coherent answer (in args.answer when done)
+4. Synthesize: Combine observations into a coherent answer ({answer_home} when done)
 5. Verify: Check if your answer actually addresses the query
 
 When uncertain:
@@ -1010,15 +1011,28 @@ Avoid:
 - Making up information not supported by tool observations
 - Calling the same tool repeatedly with identical arguments
 - Ignoring errors or unexpected results
-- Writing user-facing text during intermediate steps (save it for args.answer)
+- Writing user-facing text during intermediate steps (save it for {answer_home})
 - Generating "preview" answers before you're done gathering information
 </reasoning>""")
 
     # ─────────────────────────────────────────────────────────────
     # TONE & STYLE
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<tone>
-In your answer (ONLY when next_node is "final_response"):
+    tone_scope = (
+        "In your final answer (the plain-text reply with no tool calls):"
+        if native_mode
+        else 'In your answer (ONLY when next_node is "final_response"):'
+    )
+    tone_critical = (
+        "CRITICAL:\n"
+        "- During intermediate steps, emit ONLY tool calls. No commentary text."
+        if native_mode
+        else "CRITICAL:\n"
+        '- During intermediate steps, produce ONLY the JSON action object. Do not add commentary.\n'
+        '- Do not include a "thought" field in the JSON.'
+    )
+    prompt_sections.append(f"""<tone>
+{tone_scope}
 - Be direct and informative - get to the point
 - Use clear, professional language
 - Acknowledge limitations honestly rather than hedging excessively
@@ -1028,15 +1042,18 @@ In your answer (ONLY when next_node is "final_response"):
 - These are safe defaults. Your tone or voice can be changed in the additional_guidance section.
 - You can use markdown formatting if suggested in additional_guidance.
 
-CRITICAL:
-- During intermediate steps, produce ONLY the JSON action object. Do not add commentary.
-- Do not include a "thought" field in the JSON.
+{tone_critical}
 </tone>""")
 
     # ─────────────────────────────────────────────────────────────
     # ERROR HANDLING
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<error_handling>
+    gave_up_instruction = (
+        "Say so plainly in your final answer"
+        if native_mode
+        else "Set requires_followup: true in your finish args"
+    )
+    prompt_sections.append(f"""<error_handling>
 When things go wrong:
 
 Tool validation error: Fix your args to match the schema and retry
@@ -1046,7 +1063,7 @@ Ambiguous query: Make reasonable assumptions and note them, or ask for clarifica
 Conflicting information: Acknowledge the conflict and explain your reasoning
 
 If you cannot complete the task after reasonable attempts:
-- Set requires_followup: true in your finish args
+- {gave_up_instruction}
 - Explain what you tried and why it didn't work
 - Suggest what additional information or tools would help
 </error_handling>""")
@@ -1195,7 +1212,19 @@ def render_structured_repair_prompt(
     )
 
 
-def render_arg_repair_message(tool_name: str, error: str) -> str:
+def render_arg_repair_message(tool_name: str, error: str, *, tool_call_mode: str = "prompted") -> str:
+    if tool_call_mode == "native":
+        return (
+            f"CRITICAL: Your tool call to '{tool_name}' failed validation.\n\n"
+            f"Error: {error}\n\n"
+            "You MUST do ONE of the following:\n\n"
+            f"OPTION 1 - Call '{tool_name}' again with corrected args:\n"
+            "- Provide ALL required arguments with REAL values\n"
+            "- Do NOT use placeholders like '<auto>', 'unknown', 'n/a', or empty strings\n"
+            "- Match the exact schema types (strings, numbers, booleans, arrays)\n\n"
+            "OPTION 2 - If you cannot provide valid args, FINISH instead:\n"
+            "- Reply with plain text explaining why you cannot proceed (no tool calls)."
+        )
     return (
         f"CRITICAL: Your tool call to '{tool_name}' failed validation.\n\n"
         f"Error: {error}\n\n"

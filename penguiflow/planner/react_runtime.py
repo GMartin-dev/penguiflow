@@ -2128,9 +2128,9 @@ async def run_loop(
 
                                 if revalidation_error is not None:
                                     # Fall through to repair message
-                                    repair_msg = prompts.render_arg_repair_message(
-                                        spec.name,
+                                    repair_msg = prompts.render_arg_repair_message(spec.name,
                                         revalidation_error,
+                                        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
                                     )
                                     if isinstance(trajectory.metadata, MutableMapping):
                                         trajectory.metadata["arg_repair_message"] = repair_msg
@@ -2153,6 +2153,7 @@ async def run_loop(
                             repair_msg = prompts.render_arg_repair_message(
                                 spec.name,
                                 _serialize_validation_errors(merge_exc),
+                                tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
                             )
                             if isinstance(trajectory.metadata, MutableMapping):
                                 trajectory.metadata["arg_repair_message"] = repair_msg
@@ -2202,10 +2203,10 @@ async def run_loop(
                         )
                     else:
                         # Regular arg validation failure
-                        repair_msg = prompts.render_arg_repair_message(
-                            spec.name,
+                        repair_msg = prompts.render_arg_repair_message(spec.name,
                             arg_validation_error,
-                        )
+                                        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
+                                    )
 
                     if isinstance(trajectory.metadata, MutableMapping):
                         trajectory.metadata["arg_repair_message"] = repair_msg

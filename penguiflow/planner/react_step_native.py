@@ -130,7 +130,14 @@ def _parse_tool_args(arguments_json: str, *, tool_name: str) -> dict[str, Any]:
 
 async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     """One native-mode planner step: declare tools, map the reply to a PlannerAction."""
-    base_messages = await planner._build_messages(trajectory)
+    had_pending_steering = bool(trajectory.steering_inputs)
+    base_messages = list(await planner._build_messages(trajectory))
+    # Arg-validation repair guidance is delivered via trajectory metadata by the
+    # runtime (same contract as the prompted step) - consume it or it is lost.
+    if isinstance(trajectory.metadata, dict):
+        arg_repair_message = trajectory.metadata.pop("arg_repair_message", None)
+        if arg_repair_message:
+            base_messages.insert(0, {"role": "system", "content": arg_repair_message})
     tools, alias_to_name = build_native_tools(planner)
     # The runtime increments _action_seq and emits step_start BEFORE step runs;
     # chunks must carry the SAME seq or the UI answer gate drops them.
@@ -188,6 +195,11 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
         cost = result.cost
         tool_calls = result.tool_calls
     planner._cost_tracker.record_main_call(cost or 0.0)
+
+    # Steering inputs were rendered into this step's messages; clear them so
+    # they are not repeated on every subsequent step (prompted-step parity).
+    if had_pending_steering:
+        trajectory.steering_inputs.clear()
 
     content = (content or "").strip()
 

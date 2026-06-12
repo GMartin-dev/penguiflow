@@ -64,6 +64,7 @@ class StubNativeClient:
         self._turns = list(turns)
         self._model = model
         self.tool_declarations: list[list[str]] = []
+        self.tools_call_messages: list[list[Mapping[str, Any]]] = []
         self.complete_calls: list[list[Mapping[str, Any]]] = []
         self.streamed: list[str] = []
 
@@ -77,6 +78,7 @@ class StubNativeClient:
         on_reasoning_chunk: Any = None,
     ) -> NativeToolCallResult:
         self.tool_declarations.append([t.name for t in tools])
+        self.tools_call_messages.append(list(messages))
         result = self._turns.pop(0)
         assert isinstance(result, NativeToolCallResult), "expected a native turn"
         if stream and on_stream_chunk is not None and result.content:
@@ -343,6 +345,53 @@ class TestNativeStreaming:
         assert result.payload["raw_answer"] == "Done: hi"
         assert superseded, "preamble turn must close the answer stream with superseded=True"
         assert any(e.extra["text"] == "Let me check that." for e in thinking)
+
+
+class TestNativeRuntimeWiring:
+    @pytest.mark.asyncio
+    async def test_arg_repair_message_consumed_by_native_step(self) -> None:
+        """The runtime delivers arg-repair guidance via trajectory metadata;
+        the native step must prepend and consume it (prompted-step parity)."""
+        from penguiflow.planner import prompts
+        from penguiflow.planner.trajectory import Trajectory
+
+        client = StubNativeClient([NativeToolCallResult(content="ok")])
+        planner = make_native_planner(client, max_iters=2)
+        trajectory = Trajectory(query="hi")
+        trajectory.metadata["arg_repair_message"] = prompts.render_arg_repair_message(
+            "echo", "boom", tool_call_mode="native"
+        )
+        await planner.step(trajectory)
+
+        first_call = client.tools_call_messages[0]
+        repair = [
+            m for m in first_call if m.get("role") == "system" and "failed validation" in str(m.get("content", ""))
+        ]
+        assert repair, "native step must prepend the arg repair message"
+        content = str(repair[0]["content"])
+        assert "next_node" not in content, "native wording must not instruct JSON envelopes"
+        assert "plain text" in content
+        assert trajectory.metadata.get("arg_repair_message") is None, "message must be consumed"
+
+    @pytest.mark.asyncio
+    async def test_steering_inputs_cleared_after_native_step(self) -> None:
+        from penguiflow.planner.trajectory import Trajectory
+
+        client = StubNativeClient([NativeToolCallResult(content="ok")])
+        planner = make_native_planner(client, max_iters=2)
+        trajectory = Trajectory(query="hi")
+        trajectory.steering_inputs.append({"kind": "hint", "text": "be brief"})
+        await planner.step(trajectory)
+        assert trajectory.steering_inputs == []
+
+    def test_native_prompt_has_no_envelope_leakage(self) -> None:
+        planner = make_native_planner(StubNativeClient([]))
+        prompt = planner._system_prompt
+        assert "args.answer" not in prompt
+        assert "JSON action object" not in prompt
+        assert 'requires_followup: true' not in prompt
+        # The single deliberate negative instruction is allowed:
+        assert prompt.count("next_node") == 1
 
 
 class TestDualModeConformance:
