@@ -261,15 +261,67 @@ class TestStructuredFinalInNativeMode:
 
 class TestNativeStreaming:
     @pytest.mark.asyncio
-    async def test_thinking_streams_live_and_answer_flushes(self) -> None:
+    async def test_answer_streams_token_by_token(self) -> None:
+        """A content-only finish streams live on the answer channel (D5.3 revised)."""
         events: list[PlannerEvent] = []
-        client = StubNativeClient(
+
+        class TokenStreamingClient(StubNativeClient):
+            async def complete_with_tools(
+                self, *, messages, tools, stream=False, on_stream_chunk=None, on_reasoning_chunk=None
+            ):
+                self.tool_declarations.append([t.name for t in tools])
+                result = self._turns.pop(0)
+                if stream and on_stream_chunk is not None and result.content:
+                    for token in result.content.split(" "):
+                        on_stream_chunk(token + " ", False)
+                    on_stream_chunk("", True)
+                if stream and on_reasoning_chunk is not None and result.reasoning_content:
+                    on_reasoning_chunk(result.reasoning_content, False)
+                return result
+
+        client = TokenStreamingClient(
+            [NativeToolCallResult(content="Done: hi everyone", reasoning_content="quick check")]
+        )
+        planner = make_native_planner(
+            client,
+            max_iters=3,
+            stream_final_response=True,
+            event_callback=events.append,
+        )
+        result = await planner.run("hi")
+
+        chunks = [e for e in events if e.event_type == "llm_stream_chunk"]
+        answer = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("text")]
+        reasoning = [e for e in chunks if e.extra.get("channel") == "reasoning" and e.extra.get("text")]
+        answer_done = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("done")]
+
+        assert result.payload["raw_answer"] == "Done: hi everyone"
+        assert len(answer) == 3, "answer must stream token-by-token, not as one flush"
+        assert answer_done and not answer_done[-1].extra.get("superseded")
+        assert reasoning, "reasoning deltas must flow in native mode"
+
+    @pytest.mark.asyncio
+    async def test_disobedient_preamble_is_superseded(self) -> None:
+        """Preamble text alongside tool calls retracts the answer stream."""
+        events: list[PlannerEvent] = []
+
+        class PreambleClient(StubNativeClient):
+            async def complete_with_tools(
+                self, *, messages, tools, stream=False, on_stream_chunk=None, on_reasoning_chunk=None
+            ):
+                self.tool_declarations.append([t.name for t in tools])
+                result = self._turns.pop(0)
+                if stream and on_stream_chunk is not None and result.content:
+                    on_stream_chunk(result.content, False)
+                return result
+
+        client = PreambleClient(
             [
                 NativeToolCallResult(
-                    content="Checking the echo tool.",
+                    content="Let me check that.",
                     tool_calls=[tool_call("echo", {"text": "hi"})],
                 ),
-                NativeToolCallResult(content="Done: hi", reasoning_content="quick check"),
+                NativeToolCallResult(content="Done: hi"),
             ]
         )
         planner = make_native_planner(
@@ -281,16 +333,12 @@ class TestNativeStreaming:
         result = await planner.run("echo hi")
 
         chunks = [e for e in events if e.event_type == "llm_stream_chunk"]
+        superseded = [e for e in chunks if e.extra.get("superseded")]
         thinking = [e for e in chunks if e.extra.get("channel") == "thinking" and e.extra.get("text")]
-        answer = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("text")]
-        reasoning = [e for e in chunks if e.extra.get("channel") == "reasoning" and e.extra.get("text")]
-        answer_done = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("done")]
 
         assert result.payload["raw_answer"] == "Done: hi"
-        assert thinking, "tool-turn content must stream on the thinking channel"
-        assert [e.extra["text"] for e in answer] == ["Done: hi"]
-        assert answer_done, "answer channel must close with done=True"
-        assert reasoning, "reasoning deltas must flow in native mode"
+        assert superseded, "preamble turn must close the answer stream with superseded=True"
+        assert any(e.extra["text"] == "Let me check that." for e in thinking)
 
 
 class TestDualModeConformance:

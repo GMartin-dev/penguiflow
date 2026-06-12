@@ -772,10 +772,10 @@ to you directly by the API.
 
 - To act, CALL one or more tools (native function calls). Do not describe tool calls in text.
 - To run tools in parallel, emit MULTIPLE tool calls in a single turn.
+- CRITICAL: when you call tools, emit ONLY the tool calls - NO accompanying text, no preamble,
+  no narration. Plain text is reserved EXCLUSIVELY for your final answer.
 - When you have enough information, FINISH by replying with your complete answer as PLAIN TEXT
   with NO tool calls. Plain text with no tool call IS the final answer shown to the user.
-- Any brief text emitted alongside tool calls is treated as internal reasoning, never shown
-  to the user.
 - Never emit a JSON action envelope (no next_node/args wrapper) - call tools natively instead.
 </output_format>""")
     else:
