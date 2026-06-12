@@ -132,7 +132,9 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     """One native-mode planner step: declare tools, map the reply to a PlannerAction."""
     base_messages = await planner._build_messages(trajectory)
     tools, alias_to_name = build_native_tools(planner)
-    current_action_seq = planner._action_seq + 1
+    # The runtime increments _action_seq and emits step_start BEFORE step runs;
+    # chunks must carry the SAME seq or the UI answer gate drops them.
+    current_action_seq = planner._action_seq
     stream_allowed = bool(planner._stream_final_response)
 
     # D5.3 (revised): the native-mode prompt forbids text alongside tool calls,
@@ -144,43 +146,29 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     # briefly showing preamble text — never broken state).
     answer_chunks_emitted = 0
 
+    def _enqueue_chunk(extra: dict[str, Any]) -> None:
+        # Same path as prompted mode: guardrail redaction applies when enabled.
+        planner._enqueue_llm_stream_chunk(
+            trajectory,
+            {
+                "ts": planner._time_source(),
+                "trajectory_step": len(trajectory.steps),
+                "extra": {"action_seq": current_action_seq, **extra},
+            },
+        )
+
     def _emit_chunk(text: str, done: bool) -> None:
         nonlocal answer_chunks_emitted
         if not text:
             return
         answer_chunks_emitted += 1
-        planner._emit_event(
-            PlannerEvent(
-                event_type="llm_stream_chunk",
-                ts=planner._time_source(),
-                trajectory_step=len(trajectory.steps),
-                extra={
-                    "text": text,
-                    "done": False,
-                    "phase": "answer",
-                    "channel": "answer",
-                    "action_seq": current_action_seq,
-                },
-            )
-        )
+        _enqueue_chunk({"text": text, "done": False, "phase": "answer", "channel": "answer"})
 
     def _emit_reasoning_chunk(text: str, done: bool) -> None:
-        if not text:
+        if not text and not done:
             return
-        planner._emit_event(
-            PlannerEvent(
-                event_type="llm_stream_chunk",
-                ts=planner._time_source(),
-                trajectory_step=len(trajectory.steps),
-                extra={
-                    "text": text,
-                    "done": done,
-                    "phase": "observation",
-                    "channel": "reasoning",
-                    "action_seq": current_action_seq,
-                },
-            )
-        )
+        # Parity with prompted mode: reasoning renders on the thinking channel.
+        _enqueue_chunk({"text": text, "done": done, "phase": "thinking", "channel": "thinking"})
 
     use_reasoning = getattr(planner, "_use_native_reasoning", True)
     result = await planner._client.complete_with_tools(
@@ -204,20 +192,14 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     content = (content or "").strip()
 
     def _close_answer_stream(*, superseded: bool) -> None:
-        planner._emit_event(
-            PlannerEvent(
-                event_type="llm_stream_chunk",
-                ts=planner._time_source(),
-                trajectory_step=len(trajectory.steps),
-                extra={
-                    "text": "",
-                    "done": True,
-                    "phase": "answer",
-                    "channel": "answer",
-                    "action_seq": current_action_seq,
-                    **({"superseded": True} if superseded else {}),
-                },
-            )
+        _enqueue_chunk(
+            {
+                "text": "",
+                "done": True,
+                "phase": "answer",
+                "channel": "answer",
+                **({"superseded": True} if superseded else {}),
+            }
         )
 
     if not tool_calls:
@@ -226,20 +208,7 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
         # nothing streamed (non-streaming runs), then close the stream.
         if content and stream_allowed:
             if answer_chunks_emitted == 0:
-                planner._emit_event(
-                    PlannerEvent(
-                        event_type="llm_stream_chunk",
-                        ts=planner._time_source(),
-                        trajectory_step=len(trajectory.steps),
-                        extra={
-                            "text": content,
-                            "done": False,
-                            "phase": "answer",
-                            "channel": "answer",
-                            "action_seq": current_action_seq,
-                        },
-                    )
-                )
+                _enqueue_chunk({"text": content, "done": False, "phase": "answer", "channel": "answer"})
             _close_answer_stream(superseded=False)
         return PlannerAction(
             next_node="final_response",
@@ -254,20 +223,7 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     if stream_allowed and answer_chunks_emitted > 0:
         _close_answer_stream(superseded=True)
         if content:
-            planner._emit_event(
-                PlannerEvent(
-                    event_type="llm_stream_chunk",
-                    ts=planner._time_source(),
-                    trajectory_step=len(trajectory.steps),
-                    extra={
-                        "text": content,
-                        "done": False,
-                        "phase": "observation",
-                        "channel": "thinking",
-                        "action_seq": current_action_seq,
-                    },
-                )
-            )
+            _enqueue_chunk({"text": content, "done": False, "phase": "thinking", "channel": "thinking"})
         logger.info(
             "native_answer_stream_superseded",
             extra={"chars_streamed": len(content), "action_seq": current_action_seq},

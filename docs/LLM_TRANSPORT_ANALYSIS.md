@@ -693,7 +693,15 @@ Implementation decisions (settled 2026-06-12, before code):
   Live-verified: Claude Opus 4.8 fully complies (29 token chunks on the
   answer channel vs 19 in the prompted control; zero superseded events
   across runs) — the earlier flush-only design (v1 of this decision) was
-  rejected as a UX regression. Reasoning deltas unchanged.
+  rejected as a UX regression. Reasoning deltas render on the `thinking`
+  channel (prompted-mode parity; the playground UI has no `reasoning`
+  channel case). Three wiring fixes from the playground live check:
+  chunk `action_seq` must equal the runtime's `step_start` seq (the UI
+  answer gate silently drops mismatches — the off-by-one made SSE mode a
+  wall of text while AG-UI, which doesn't gate, streamed fine); emissions
+  go through `_enqueue_llm_stream_chunk` (guardrail redaction parity with
+  prompted mode); and reasoning uses channel `thinking`. SSE wire
+  verified post-fix: 36/36 answer chunks matching the gate.
 - **D5.4 — Structured final answers reuse Phase 2 machinery (supersedes the
   "final_response as declared tool" sketch).** A content-finish carries no
   `structured` payload, so `_ensure_structured_final` runs its existing

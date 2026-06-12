@@ -292,13 +292,17 @@ class TestNativeStreaming:
 
         chunks = [e for e in events if e.event_type == "llm_stream_chunk"]
         answer = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("text")]
-        reasoning = [e for e in chunks if e.extra.get("channel") == "reasoning" and e.extra.get("text")]
+        # Parity with prompted mode: reasoning renders on the thinking channel.
+        reasoning = [e for e in chunks if e.extra.get("channel") == "thinking" and e.extra.get("text")]
         answer_done = [e for e in chunks if e.extra.get("channel") == "answer" and e.extra.get("done")]
+        step_start_seqs = {e.extra.get("action_seq") for e in events if e.event_type == "step_start"}
 
         assert result.payload["raw_answer"] == "Done: hi everyone"
         assert len(answer) == 3, "answer must stream token-by-token, not as one flush"
         assert answer_done and not answer_done[-1].extra.get("superseded")
         assert reasoning, "reasoning deltas must flow in native mode"
+        # The UI answer gate drops mismatched seqs - chunks must match step_start.
+        assert {e.extra.get("action_seq") for e in answer} <= step_start_seqs
 
     @pytest.mark.asyncio
     async def test_disobedient_preamble_is_superseded(self) -> None:
