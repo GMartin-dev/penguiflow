@@ -682,15 +682,18 @@ Implementation decisions (settled 2026-06-12, before code):
   untouched. (This supersedes the earlier "tool-result round-trip as
   tool-role messages" sketch — that form returns only if provider-side
   tool-result caching is ever needed.)
-- **D5.3 — Streaming: thinking-channel live, answer flush on finish.**
-  Because preamble-with-tool-calls is real (D5.1 probe), content deltas
-  cannot optimistically stream to the answer channel. Native mode streams
-  content deltas live on the `thinking` channel; when the turn completes with
-  no tool calls, the full answer is flushed to the `answer` channel (single
-  chunk + done, the same emission shape `finish_repair` uses). Trade-off vs
-  prompted mode: tool-turn thoughts now stream live (better), final-answer
-  token streaming becomes a single flush (worse); revisit with
-  tool-call-delta lookahead post-3.11. Reasoning deltas unchanged.
+- **D5.3 (revised same day after review) — token-by-token answer streaming
+  with a superseded guard.** The native prompt forbids text alongside tool
+  calls ("emit ONLY the tool calls"); content deltas then stream
+  optimistically to the `answer` channel token-by-token — full parity with
+  prompted mode. If a model disobeys (preamble before tool calls), the answer
+  stream closes with `superseded: True` and the text re-emits on `thinking`,
+  so consumers that honor the marker retract cleanly and consumers that
+  ignore it degrade to briefly-shown preamble, never broken state.
+  Live-verified: Claude Opus 4.8 fully complies (29 token chunks on the
+  answer channel vs 19 in the prompted control; zero superseded events
+  across runs) — the earlier flush-only design (v1 of this decision) was
+  rejected as a UX regression. Reasoning deltas unchanged.
 - **D5.4 — Structured final answers reuse Phase 2 machinery (supersedes the
   "final_response as declared tool" sketch).** A content-finish carries no
   `structured` payload, so `_ensure_structured_final` runs its existing
@@ -764,9 +767,10 @@ malformed provider tool call).
   `<structured_final_response>` (~40% smaller prompt).
 
 Live verification (Databricks `claude-opus-4-8`, real youtube-download agent
-with MCP tools): native tool call executed and answered correctly; streaming
-per D5.3 (28 thinking-channel chunks live + answer flush; prompted control
-streams 21 token-level answer chunks); **structured final answer through the
+with MCP tools): native tool call executed and answered correctly;
+**token-by-token answer streaming** per D5.3-revised (29 answer-channel
+chunks vs 19 in the prompted control; zero preamble/superseded events —
+the no-preamble instruction holds); **structured final answer through the
 native path validated** (`final_response_structured_repair_attempt` →
 `validated`, exactly one extraction turn); `databricks/databricks-gpt-5-5` in
 native mode downgraded live with the route reason and completed via prompted
