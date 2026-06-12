@@ -850,6 +850,26 @@ deltas (pre-existing route behavior, identical in prompted mode).
    Databricks route (Anthropic requires preserving thinking blocks across
    tool-use turns — confirm the Databricks OpenAI-compat surface handles
    this or gate native mode off for those models via profile).
+   *(Resolved live 2026-06-12 — they compose; see Phase 5.)*
+9. **Native-mode tool-turn preamble as a UX affordance — pending upstream UI
+   team validation.** Phase 5's D5.3 went through two designs, and BOTH are
+   legitimate UX positions:
+   - **Shipped (D5.3-revised)**: the native prompt forbids text alongside
+     tool calls → the answer streams token-by-token on the `answer` channel
+     (29 vs 19 chunks against the prompted control, live). Tool turns are
+     silent on the content channel.
+   - **Rejected v1 (in git history, `b5e4246^`)**: allow the preamble
+     ("I'll check that…") and stream it on the `thinking` channel as live
+     status text, flushing the answer at turn end. Better perceived activity
+     during tool turns; worse (flush-only) answer streaming.
+   The machinery supports either choice — and a hybrid is feasible (keep the
+   no-preamble prompt for the answer-streaming win, and have the UI render
+   the existing `reasoning`/`thinking` channels or planner step events as
+   status). If the UI team wants the preamble, the switch is a prompt-section
+   toggle (e.g. a `native_preamble: bool` planner knob), NOT a redesign; the
+   `superseded` marker contract on the answer channel already covers
+   consumers either way. Decide before flipping any `tool_call_mode`
+   defaults (Phase 7).
 
 ---
 
