@@ -129,20 +129,34 @@ result = await planner.run(
 
 ## 4. pydantic-ai transport (Phase 1)
 
-The planner does not expose `transport=` directly — build the client:
+The wiring is automatic and profile-driven: every `ReactPlanner(llm=...,
+use_native_llm=True)` resolves its transport per model via
+`ModelProfile.preferred_transport`. Today **no profile prefers
+"pydantic-ai"** — that flip is deliberately gated behind the Phase 6 parity
+matrix — so to test it you force it, planner-level:
 
 ```python
 # pip install 'penguiflow[pydantic-ai]'
-from penguiflow.llm.protocol import create_native_adapter
-
-client = create_native_adapter("databricks-claude-opus-4-8", transport="pydantic-ai")
-planner = ReactPlanner(llm_client=client, ...)
+planner = ReactPlanner(
+    llm="claude-sonnet-4-5",
+    use_native_llm=True,
+    llm_transport="pydantic-ai",   # forces ALL of this planner's clients
+    ...
+)
 ```
 
-- Resolution: explicit kwarg > `ModelProfile.preferred_transport` > `"native"`.
+(Equivalent lower-level form: `llm_client=create_native_adapter(model,
+transport="pydantic-ai")`.)
+
+- Resolution per client: explicit (`llm_transport` / `transport`) >
+  `ModelProfile.preferred_transport` > `"native"`. When Phase 6 flips a model
+  family's profile, agents pick it up with zero code changes — that's the
+  designed end state; the kwarg exists for testing ahead of the flip.
+- Operators can flip a single model today without a release:
+  `register_profile("my-model", ModelProfile(..., preferred_transport="pydantic-ai"))`.
 - Databricks Claude reasoning models are profile-pinned to the native
   transport (the generic one can't parse their reasoning content blocks);
-  an explicit kwarg overrides the pin if you want to test anyway.
+  the explicit kwarg overrides the pin if you want to test anyway.
 - Works with `tool_call_mode="native"` and all features above.
 
 ## 5. Tracing + cost (Phase 4 + 3.11.0a1 seam)

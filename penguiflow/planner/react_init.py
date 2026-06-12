@@ -93,6 +93,7 @@ def init_react_planner(
     final_response_model: type[BaseModel] | None = None,
     final_response_retries: int = 1,
     tool_call_mode: str = "prompted",
+    llm_transport: str | None = None,
     short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
     background_tasks: BackgroundTasksConfig | None = None,
     error_recovery: ErrorRecoveryConfig | None = None,
@@ -285,6 +286,7 @@ def init_react_planner(
     if tool_call_mode not in ("prompted", "native"):
         raise ValueError(f"Unknown tool_call_mode {tool_call_mode!r}; expected 'prompted' or 'native'")
     planner._tool_call_mode = tool_call_mode
+    planner._llm_transport = llm_transport
     planner._final_response_model = final_response_model
     planner._final_response_retries = final_response_retries
     planner._final_response_schema = None
@@ -661,6 +663,7 @@ def init_react_planner(
             # Use the native LLM layer instead of LiteLLM
             planner._client = create_native_adapter(
                 llm,
+                transport=llm_transport,
                 temperature=temperature,
                 json_schema_mode=json_schema_mode,
                 max_retries=llm_max_retries,
@@ -692,6 +695,7 @@ def init_react_planner(
         if getattr(planner, "_use_native_llm", False):
             planner._memory_summarizer_client = create_native_adapter(
                 planner._memory_config.summarizer_model,
+                transport=llm_transport,
                 temperature=temperature,
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
@@ -713,6 +717,7 @@ def init_react_planner(
         if getattr(planner, "_use_native_llm", False):
             planner._summarizer_client = create_native_adapter(
                 summarizer_llm,
+                transport=llm_transport,
                 temperature=temperature,
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
@@ -737,6 +742,7 @@ def init_react_planner(
             if getattr(planner, "_use_native_llm", False):
                 planner._reflection_client = create_native_adapter(
                     reflection_llm,
+                    transport=llm_transport,
                     temperature=temperature,
                     json_schema_mode=True,
                     max_retries=llm_max_retries,

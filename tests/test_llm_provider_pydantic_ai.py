@@ -423,6 +423,27 @@ class TestTransportSelection:
         with pytest.raises(ValueError, match="Unknown transport"):
             NativeLLMAdapter("gpt-4o", transport="grpc")
 
+    def test_react_planner_llm_transport_kwarg(self) -> None:
+        """Planner-level opt-in: no hand-built client needed."""
+        from penguiflow.planner import ReactPlanner
+
+        with patch(f"{MODULE}.PydanticAIProvider") as mock_provider_cls:
+            mock_provider_cls.return_value = MagicMock(model="gpt-4o")
+            planner = ReactPlanner(
+                llm="gpt-4o",
+                use_native_llm=True,
+                llm_transport="pydantic-ai",
+                catalog=[],
+            )
+            mock_provider_cls.assert_called()
+            assert planner._llm_transport == "pydantic-ai"
+
+    def test_react_planner_invalid_llm_transport_fails_loudly(self) -> None:
+        from penguiflow.planner import ReactPlanner
+
+        with pytest.raises(ValueError, match="Unknown transport"):
+            ReactPlanner(llm="gpt-4o", use_native_llm=True, llm_transport="grpc", catalog=[])
+
     def test_create_native_adapter_threads_transport(self) -> None:
         from penguiflow.llm.protocol import create_native_adapter
 
