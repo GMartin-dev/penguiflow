@@ -380,6 +380,7 @@ class ReactPlanner:
     _final_response_model: type[BaseModel] | None
     _final_response_retries: int
     _final_response_schema: dict[str, Any] | None
+    _tool_call_mode: str
     _summarizer_client: JSONLLMClient | None
     _system_prompt: str
     _system_prompt_extra: str | None
@@ -459,6 +460,7 @@ class ReactPlanner:
         stream_final_response: bool = False,
         final_response_model: type[BaseModel] | None = None,
         final_response_retries: int = 1,
+        tool_call_mode: str = "prompted",
         short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
         background_tasks: BackgroundTasksConfig | None = None,
         error_recovery: ErrorRecoveryConfig | None = None,
@@ -526,6 +528,7 @@ class ReactPlanner:
             "stream_final_response": stream_final_response,
             "final_response_model": final_response_model,
             "final_response_retries": final_response_retries,
+            "tool_call_mode": tool_call_mode,
             "short_term_memory": short_term_memory,
             "background_tasks": background_tasks,
             "error_recovery": error_recovery,
@@ -582,6 +585,7 @@ class ReactPlanner:
             stream_final_response=stream_final_response,
             final_response_model=final_response_model,
             final_response_retries=final_response_retries,
+            tool_call_mode=tool_call_mode,
             short_term_memory=short_term_memory,
             background_tasks=background_tasks,
             error_recovery=error_recovery,

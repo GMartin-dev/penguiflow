@@ -216,6 +216,48 @@ class FallbackLLMClient:
         on_reasoning_chunk: Callable[[str, bool], None] | None = None,
     ) -> tuple[str, float]:
         """Run a completion, failing over to fallback models on 429."""
+
+        async def call(adapter: Any, stream_chunk: Callable[[str, bool], None] | None) -> tuple[str, float]:
+            return await adapter.complete(
+                messages=messages,
+                response_format=response_format,
+                stream=stream,
+                on_stream_chunk=stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+            )
+
+        return await self._with_failover(call, stream=stream, on_stream_chunk=on_stream_chunk)
+
+    async def complete_with_tools(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Any],
+        stream: bool = False,
+        on_stream_chunk: Callable[[str, bool], None] | None = None,
+        on_reasoning_chunk: Callable[[str, bool], None] | None = None,
+    ) -> Any:
+        """Native tool-calling sibling of ``complete`` with the same failover."""
+
+        async def call(adapter: Any, stream_chunk: Callable[[str, bool], None] | None) -> Any:
+            return await adapter.complete_with_tools(
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                on_stream_chunk=stream_chunk,
+                on_reasoning_chunk=on_reasoning_chunk,
+            )
+
+        return await self._with_failover(call, stream=stream, on_stream_chunk=on_stream_chunk)
+
+    async def _with_failover(
+        self,
+        call: Callable[[Any, Callable[[str, bool], None] | None], Any],
+        *,
+        stream: bool,
+        on_stream_chunk: Callable[[str, bool], None] | None,
+    ) -> Any:
+        """Shared 429 failover core: entry selection, cooldown, mid-stream rules."""
         chunks_emitted = 0
 
         def wrapped_stream_chunk(text: str, done: bool) -> None:
@@ -256,13 +298,7 @@ class FallbackLLMClient:
             model, key_index = entry
             adapter = self._adapter(entry)
             try:
-                return await adapter.complete(
-                    messages=messages,
-                    response_format=response_format,
-                    stream=stream,
-                    on_stream_chunk=wrapped_stream_chunk if stream else None,
-                    on_reasoning_chunk=on_reasoning_chunk,
-                )
+                return await call(adapter, wrapped_stream_chunk if stream else None)
             except LLMRateLimitError as exc:
                 last_error = exc
                 cooldown_s = max(self._config.cooldown_s, exc.retry_after or 0.0)
