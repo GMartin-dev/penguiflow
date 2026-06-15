@@ -8,8 +8,13 @@ from penguiflow.llm.errors import LLMInvalidRequestError, LLMRateLimitError
 from penguiflow.llm.fallback import (
     CooldownStore,
     FallbackLLMClient,
+    FallbackProvider,
+    GenericFallbackLLMClient,
     ModelFallbackConfig,
 )
+from penguiflow.llm.profiles import ModelProfile
+from penguiflow.llm.providers.base import Provider
+from penguiflow.llm.types import CompletionResponse, LLMMessage, TextPart, Usage
 
 
 class _FakeClockStore(CooldownStore):
@@ -52,11 +57,54 @@ class _FakeAdapter:
         return (outcome, 0.0)
 
 
+class _FakeGenericClient(_FakeAdapter):
+    pass
+
+
+class _FakeProvider(Provider):
+    def __init__(self, model: str, api_key: str | None, outcomes: list) -> None:  # type: ignore[type-arg]
+        self._model = model
+        self._api_key = api_key
+        self._outcomes = outcomes
+        self.calls = 0
+        self._profile = ModelProfile()
+
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
+    @property
+    def profile(self) -> ModelProfile:
+        return self._profile
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    async def complete(self, request, **kwargs):  # type: ignore[no-untyped-def]
+        del request, kwargs
+        self.calls += 1
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return CompletionResponse(
+            message=LLMMessage(role="assistant", parts=[TextPart(text=outcome)]),
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+
+
 def _factory(script: dict):  # type: ignore[type-arg]
     """Build an adapter_factory backed by a (model, api_key) -> outcomes script."""
 
     def factory(model: str, *, api_key: str | None = None, **_: object) -> _FakeAdapter:
         return _FakeAdapter(model, api_key, list(script.get((model, api_key), ["ok"])))
+
+    return factory
+
+
+def _provider_factory(script: dict):  # type: ignore[type-arg]
+    def factory(model: str, *, api_key: str | None = None, **_: object) -> _FakeProvider:
+        return _FakeProvider(model, api_key, list(script.get((model, api_key), ["ok"])))
 
     return factory
 
@@ -106,9 +154,7 @@ class TestFallbackLLMClient:
     @pytest.mark.asyncio
     async def test_uses_primary_when_healthy(self) -> None:
         cfg = ModelFallbackConfig(models=["primary", "backup"])
-        client = FallbackLLMClient(
-            "primary", cfg, adapter_factory=_factory({("primary", None): ["from-primary"]})
-        )
+        client = FallbackLLMClient("primary", cfg, adapter_factory=_factory({("primary", None): ["from-primary"]}))
         text, _ = await client.complete(messages=_MSG)
         assert text == "from-primary"
 
@@ -230,9 +276,117 @@ class TestFallbackLLMClient:
         client = FallbackLLMClient(
             "primary",
             cfg,
-            adapter_factory=_factory(
-                {("primary", None): [LLMInvalidRequestError(message="bad", status_code=400)]}
-            ),
+            adapter_factory=_factory({("primary", None): [LLMInvalidRequestError(message="bad", status_code=400)]}),
         )
         with pytest.raises(LLMInvalidRequestError):
             await client.complete(messages=_MSG)
+
+
+class TestGenericFallbackLLMClient:
+    @pytest.mark.asyncio
+    async def test_switches_litellm_or_dspy_style_client_on_429(self) -> None:
+        cfg = ModelFallbackConfig(models=["primary", "backup"])
+        client = GenericFallbackLLMClient(
+            "primary",
+            cfg,
+            client_factory=lambda model, *, api_key=None, **_: _FakeGenericClient(
+                model,
+                api_key,
+                list(
+                    {
+                        ("primary", None): [LLMRateLimitError(message="429", status_code=429)],
+                        ("backup", None): ["backup-ok"],
+                    }.get((model, api_key), ["ok"])
+                ),
+            ),
+        )
+        text, _ = await client.complete(messages=_MSG)
+        assert text == "backup-ok"
+
+    @pytest.mark.asyncio
+    async def test_streaming_forwards_chunks_and_fails_over(self) -> None:
+        # Primary 429s before emitting any chunk -> transparent failover; the
+        # backup streams its chunk through the caller's callback.
+        cfg = ModelFallbackConfig(models=["primary", "backup"])
+        client = GenericFallbackLLMClient(
+            "primary",
+            cfg,
+            client_factory=lambda model, *, api_key=None, **_: _FakeGenericClient(
+                model,
+                api_key,
+                list(
+                    {
+                        ("primary", None): [LLMRateLimitError(message="429", status_code=429)],
+                        ("backup", None): ["backup-ok"],
+                    }.get((model, api_key), ["ok"])
+                ),
+            ),
+        )
+        chunks: list[tuple[str, bool]] = []
+        text, _ = await client.complete(
+            messages=_MSG, stream=True, on_stream_chunk=lambda t, d: chunks.append((t, d))
+        )
+        assert text == "backup-ok"
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_429_is_not_replayed(self) -> None:
+        # Once output has streamed to the caller, a 429 cannot be transparently
+        # retried: the error propagates (no mid-stream replay).
+        cfg = ModelFallbackConfig(models=["primary", "backup"])
+        client = GenericFallbackLLMClient(
+            "primary",
+            cfg,
+            client_factory=lambda model, *, api_key=None, **_: _FakeGenericClient(
+                model,
+                api_key,
+                list(
+                    {
+                        ("primary", None): [{"stream_then_raise": "partial"}],
+                        ("backup", None): ["backup-ok"],
+                    }.get((model, api_key), ["ok"])
+                ),
+            ),
+        )
+        seen: list[tuple[str, bool]] = []
+        with pytest.raises(LLMRateLimitError):
+            await client.complete(
+                messages=_MSG, stream=True, on_stream_chunk=lambda t, d: seen.append((t, d))
+            )
+        assert seen == [("partial", False)]
+
+
+class TestFallbackProvider:
+    @pytest.mark.asyncio
+    async def test_provider_failover_on_429(self) -> None:
+        cfg = ModelFallbackConfig(models=["primary", "backup"])
+        provider = FallbackProvider(
+            "primary",
+            cfg,
+            provider_factory=_provider_factory(
+                {
+                    ("primary", None): [LLMRateLimitError(message="429", status_code=429)],
+                    ("backup", None): ["backup-response"],
+                }
+            ),
+        )
+        response = await provider.complete(object())
+        assert response.message.text == "backup-response"
+
+    @pytest.mark.asyncio
+    async def test_model_reports_active_model_for_pricing(self) -> None:
+        # ``provider.model`` drives pricing/telemetry above this seam, so after a
+        # failover it must report the model that actually answered, not the primary.
+        cfg = ModelFallbackConfig(models=["primary", "backup"])
+        provider = FallbackProvider(
+            "primary",
+            cfg,
+            provider_factory=_provider_factory(
+                {
+                    ("primary", None): [LLMRateLimitError(message="429", status_code=429)],
+                    ("backup", None): ["backup-response"],
+                }
+            ),
+        )
+        assert provider.model == "primary"  # before any call
+        await provider.complete(object())
+        assert provider.model == "backup"  # attributed to the model that answered

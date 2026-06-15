@@ -30,6 +30,35 @@ You can configure `ReactPlanner` in two ways:
 3. Native LLM layer (adapter behind `JSONLLMClient`):
    - `ReactPlanner(llm="...", use_native_llm=True, ...)`
 
+Rate-limit fallback (`llm_fallback=...`) is guaranteed only for PenguiFlow-built
+client paths:
+
+- native adapters built by the planner (`use_native_llm=True`, the default),
+  including native tool-calling,
+- the deprecated LiteLLM planner path (`use_native_llm=False`).
+
+Both paths stream and emit reasoning callbacks even with `llm_fallback` enabled.
+A 429 that occurs *after* output has already streamed is not replayed: the
+fallback wrapper raises so the planner retries the step on a fresh model.
+
+Arbitrary user-supplied `llm_client` implementations are **not** automatically
+wrapped. Passing `llm_fallback` together with any `llm_client=...` raises
+`ValueError` instead of being silently ignored — adopt a PenguiFlow-managed
+client (native or LiteLLM) to get fallback.
+
+> **Deprecated:** `DSPyLLMClient` is deprecated and unmaintained. It is no longer
+> part of PenguiFlow's supported LLM surface and does **not** participate in
+> built-in fallback (constructing it emits a `DeprecationWarning`). Use the
+> native LLM layer (default) or `transport="pydantic-ai"` instead.
+
+For the lower-level `penguiflow.llm.LLMClient`, pass
+`LLMClient(model, fallback=ModelFallbackConfig(...))` (or
+`generate_structured(..., fallback=...)`). The output mode is chosen once across
+the whole chain using the **intersection** of every model's capabilities, so a
+mode the primary supports but a fallback model does not (e.g. provider-native
+structured output) is automatically downgraded to one all models honor. Per-call
+cost is attributed to the model that actually answered.
+
 See **[Native LLM layer](native-llm.md)** for operational guidance.
 
 ### `JSONLLMClient.complete(...)`

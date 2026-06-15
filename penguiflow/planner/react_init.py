@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from ..artifacts import ArtifactStore, NoOpArtifactStore, discover_artifact_store
 from ..catalog import NodeSpec, ToolLoadingMode, build_catalog
 from ..llm import CooldownStore, ModelFallbackConfig, create_native_adapter
+from ..llm.fallback import GenericFallbackLLMClient
 from ..node import Node
 from ..registry import ModelRegistry
 from ..skills.provider import CompositeSkillProvider, LocalSkillProvider, SkillProvider, SkillProviderFactory
@@ -52,6 +53,73 @@ from .tool_search_tool import tool_search as tool_search_tool
 from .trajectory import TrajectorySummary
 
 logger = logging.getLogger("penguiflow.planner")
+
+
+def _build_litellm_client(
+    llm: str | Mapping[str, Any],
+    *,
+    temperature: float,
+    json_schema_mode: bool,
+    max_retries: int,
+    timeout_s: float,
+    streaming_enabled: bool = False,
+    use_native_reasoning: bool = True,
+    reasoning_effort: str | None = None,
+    llm_fallback: ModelFallbackConfig | None = None,
+    cooldown_store: CooldownStore | None = None,
+) -> JSONLLMClient:
+    def _factory(model: str, *, api_key: str | None = None, **kwargs: Any) -> _LiteLLMJSONClient:
+        llm_value: str | dict[str, Any]
+        llm_config = dict(extra_kwargs)
+        llm_config["model"] = model
+        if api_key is not None:
+            llm_config["api_key"] = api_key
+        llm_value = llm_config if extra_kwargs or api_key is not None else model
+        return _LiteLLMJSONClient(llm_value, **kwargs)
+
+    if llm_fallback is None:
+        return _LiteLLMJSONClient(
+            llm,
+            temperature=temperature,
+            json_schema_mode=json_schema_mode,
+            max_retries=max_retries,
+            timeout_s=timeout_s,
+            streaming_enabled=streaming_enabled,
+            use_native_reasoning=use_native_reasoning,
+            reasoning_effort=reasoning_effort,
+        )
+
+    if isinstance(llm, Mapping):
+        model_name = str(llm.get("model", ""))
+        api_key = llm.get("api_key")
+        extra_kwargs = dict(llm)
+        extra_kwargs.pop("model", None)
+        extra_kwargs.pop("api_key", None)
+    else:
+        model_name = llm
+        api_key = None
+        extra_kwargs = {}
+
+    # NOTE: ``extra_kwargs`` (provider options carried in the llm mapping, e.g.
+    # ``api_base``) are NOT forwarded as constructor kwargs here. ``_factory``
+    # already folds them back into ``llm_value`` (the first positional arg of
+    # ``_LiteLLMJSONClient``). Passing them again would both duplicate them and
+    # crash, since ``_LiteLLMJSONClient.__init__`` has no ``**kwargs``.
+    return GenericFallbackLLMClient(
+        model_name,
+        llm_fallback,
+        client_factory=_factory,
+        cooldown_store=cooldown_store,
+        default_api_key=api_key,
+        temperature=temperature,
+        json_schema_mode=json_schema_mode,
+        max_retries=max_retries,
+        timeout_s=timeout_s,
+        streaming_enabled=streaming_enabled,
+        use_native_reasoning=use_native_reasoning,
+        reasoning_effort=reasoning_effort,
+        retry_rate_limit_errors=False,
+    )
 
 
 def init_react_planner(
@@ -598,19 +666,28 @@ def init_react_planner(
     fallback_store = CooldownStore() if llm_fallback is not None else None
 
     if llm_client is not None:
+        from .dspy_client import DSPyLLMClient
+
+        # Built-in rate-limit fallback is only wired into PenguiFlow-managed clients
+        # (native adapters and the LiteLLM JSON client). A user-supplied ``llm_client``
+        # — including the deprecated DSPyLLMClient — is never auto-upgraded, so fail
+        # loudly rather than silently ignore ``llm_fallback``.
+        if llm_fallback is not None:
+            raise ValueError(
+                "llm_fallback is not supported with a custom llm_client. It only applies "
+                "to PenguiFlow-managed clients: use the native LLM layer (default) or "
+                "use_native_llm=False (LiteLLM). DSPyLLMClient is deprecated and does not "
+                "participate in fallback."
+            )
+
+        is_dspy = isinstance(llm_client, DSPyLLMClient)
         planner._client = llm_client
         # When using a custom client, auxiliary clients default to LiteLLM for consistency
         planner._use_native_llm = False
 
-        # CRITICAL: Detect DSPy client and create separate instances for multi-schema support
-        # DSPyLLMClient is hardcoded to a single output schema, so we need separate
-        # instances for reflection (ReflectionCritique), summarization (TrajectorySummary),
-        # and clarification (ClarificationResponse)
-        from .dspy_client import DSPyLLMClient
-
-        is_dspy = isinstance(llm_client, DSPyLLMClient)
-
-        # Create DSPy reflection client if reflection enabled
+        # CRITICAL: DSPy clients are hardcoded to a single output schema, so distinct
+        # instances are needed for reflection (ReflectionCritique), clarification
+        # (ClarificationResponse), and summarization (TrajectorySummary).
         if is_dspy and reflection_config and reflection_config.enabled:
             assert isinstance(llm_client, DSPyLLMClient)  # for mypy
             logger.info(
@@ -675,7 +752,7 @@ def init_react_planner(
                 cooldown_store=fallback_store,
             )
         else:
-            planner._client = _LiteLLMJSONClient(
+            planner._client = _build_litellm_client(
                 llm,
                 temperature=temperature,
                 json_schema_mode=json_schema_mode,
@@ -684,6 +761,8 @@ def init_react_planner(
                 streaming_enabled=stream_final_response,
                 use_native_reasoning=use_native_reasoning,
                 reasoning_effort=reasoning_effort,
+                llm_fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
 
     if (
@@ -704,12 +783,14 @@ def init_react_planner(
                 cooldown_store=fallback_store,
             )
         else:
-            planner._memory_summarizer_client = _LiteLLMJSONClient(
+            planner._memory_summarizer_client = _build_litellm_client(
                 planner._memory_config.summarizer_model,
                 temperature=temperature,
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
                 timeout_s=llm_timeout_s,
+                llm_fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
 
     # LiteLLM-based separate clients (override DSPy if explicitly provided)
@@ -726,12 +807,14 @@ def init_react_planner(
                 cooldown_store=fallback_store,
             )
         else:
-            planner._summarizer_client = _LiteLLMJSONClient(
+            planner._summarizer_client = _build_litellm_client(
                 summarizer_llm,
                 temperature=temperature,
                 json_schema_mode=True,
                 max_retries=llm_max_retries,
                 timeout_s=llm_timeout_s,
+                llm_fallback=llm_fallback,
+                cooldown_store=fallback_store,
             )
 
     # Only set reflection client from reflection_llm if not already set by DSPy
@@ -751,10 +834,12 @@ def init_react_planner(
                     cooldown_store=fallback_store,
                 )
             else:
-                planner._reflection_client = _LiteLLMJSONClient(
+                planner._reflection_client = _build_litellm_client(
                     reflection_llm,
                     temperature=temperature,
                     json_schema_mode=True,
                     max_retries=llm_max_retries,
                     timeout_s=llm_timeout_s,
+                    llm_fallback=llm_fallback,
+                    cooldown_store=fallback_store,
                 )

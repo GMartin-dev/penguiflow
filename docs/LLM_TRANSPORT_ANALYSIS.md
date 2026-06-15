@@ -845,6 +845,15 @@ OpenRouter reasoning deltas, live-verified).
 2. A production agent built on 3.10.0 (ReactPlanner + `llm="databricks-..."` +
    `llm_fallback=...`) runs identically with no code changes, with the new
    transport on and off.
+   Current code status on 2026-06-15: built-in rate-limit fallback is now
+   uniform across every PenguiFlow-managed client seam — native adapters
+   (incl. native tool-calling and the pydantic-ai transport), the deprecated
+   LiteLLM planner path, and `penguiflow.llm.LLMClient` (provider-level
+   `FallbackProvider`, with chain-intersection mode selection and
+   actual-model cost attribution). It is intentionally **not** applied to
+   arbitrary custom `llm_client` implementations: combining `llm_fallback`
+   with `llm_client=...` raises `ValueError`. The `DSPyLLMClient` path is
+   deprecated and excluded from fallback.
 3. New features are **opt-in**; defaults reproduce today's behavior exactly
    (including the structured-output prompt content when
    `final_response_model` is unset).

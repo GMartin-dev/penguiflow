@@ -13,6 +13,7 @@ from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel
 
+from ..llm.errors import LLMRateLimitError
 from ..llm.types import TextPart
 from . import prompts
 from .models import (
@@ -555,6 +556,7 @@ class _LiteLLMJSONClient:
         streaming_enabled: bool = False,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        retry_rate_limit_errors: bool = True,
     ) -> None:
         import warnings
 
@@ -573,6 +575,7 @@ class _LiteLLMJSONClient:
         self._streaming_enabled = streaming_enabled
         self._use_native_reasoning = use_native_reasoning
         self._reasoning_effort = reasoning_effort
+        self._retry_rate_limit_errors = retry_rate_limit_errors
 
     async def complete(
         self,
@@ -895,6 +898,8 @@ class _LiteLLMJSONClient:
                 last_error = exc
                 error_type = exc.__class__.__name__
                 if "RateLimit" in error_type or "ServiceUnavailable" in error_type:
+                    if "RateLimit" in error_type and not self._retry_rate_limit_errors:
+                        raise LLMRateLimitError(message=str(exc), provider="litellm", status_code=429) from exc
                     backoff_s = 2**attempt
                     logger.warning(
                         "llm_retry",
@@ -915,6 +920,25 @@ class _LiteLLMJSONClient:
         )
         msg = f"LLM call failed after {self._max_retries} retries"
         raise RuntimeError(msg) from last_error
+
+
+def supports_callback_streaming(client: Any) -> bool:
+    """Whether a planner client honors the callback-based streaming contract.
+
+    Returns True for the native adapter, the LiteLLM JSON client, and the
+    fallback wrappers that delegate to either of those. Including the wrappers
+    means enabling ``llm_fallback`` no longer silently disables streaming /
+    reasoning callbacks. (A 429 *after* output has already streamed cannot be
+    transparently retried — the wrapper raises so the planner retries the step
+    on a fresh model; mid-stream output is not replayed.)
+    """
+    from penguiflow.llm.fallback import FallbackLLMClient, GenericFallbackLLMClient
+    from penguiflow.llm.protocol import NativeLLMAdapter
+
+    return isinstance(
+        client,
+        (_LiteLLMJSONClient, NativeLLMAdapter, FallbackLLMClient, GenericFallbackLLMClient),
+    )
 
 
 def _estimate_size(messages: Sequence[Mapping[str, Any]]) -> int:
@@ -1309,12 +1333,10 @@ async def request_revision(
     messages.append({"role": "user", "content": revision_prompt})
 
     # Enable streaming for revision if callback provided and client supports it
-    from penguiflow.llm.protocol import NativeLLMAdapter
-
     stream_allowed = (
         on_stream_chunk is not None
         and planner._stream_final_response
-        and isinstance(planner._client, (_LiteLLMJSONClient, NativeLLMAdapter))
+        and supports_callback_streaming(planner._client)
     )
 
     llm_result = await planner._client.complete(

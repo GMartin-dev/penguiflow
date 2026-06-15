@@ -7,7 +7,37 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## Unreleased
 
+### Added
+- **Uniform built-in LLM fallback**: rate-limit (`429`) fallback is now applied at
+  every PenguiFlow-managed client seam, not just the native transport. The
+  deprecated LiteLLM planner path (`use_native_llm=False`) wraps in a shared
+  fallback chain, and `penguiflow.llm.LLMClient` gains
+  `LLMClient(..., fallback=..., cooldown_store=...)` and
+  `generate_structured(..., fallback=..., cooldown_store=...)` backed by a
+  provider-level `FallbackProvider`. Output mode for `LLMClient` fallback is
+  chosen across the **intersection** of every chain model's capabilities (so a
+  mode the primary supports but a fallback model does not is downgraded), and
+  per-call cost/telemetry is attributed to the model that actually answered.
+  Streaming and reasoning callbacks now flow through both fallback wrappers
+  (native and LiteLLM); a 429 after output has streamed is not replayed.
+  Defaults are unchanged — fallback only activates when `llm_fallback=` / `fallback=`
+  is passed.
+
+### Changed
+- `llm_fallback` combined with a custom `llm_client=...` now raises `ValueError`
+  instead of being silently ignored. Fallback applies only to PenguiFlow-managed
+  clients (native or LiteLLM).
+
+### Deprecated
+- `DSPyLLMClient` is deprecated and unmaintained; constructing it emits a
+  `DeprecationWarning`. It is excluded from built-in fallback. Use the native LLM
+  layer (default) or `transport="pydantic-ai"`.
+
 ### Fixed
+- LiteLLM planner fallback with a dict `llm` config carrying extra provider keys
+  (e.g. `api_base`) crashed with `TypeError` (kwargs were both folded into the
+  client config and re-passed to a constructor without `**kwargs`); the extra keys
+  are now applied once.
 - Databricks Claude Opus 4.8 reasoning: requests with `reasoning_effort` sent a
   thinking budget that Databricks rejects with 400 ("thinking.type.enabled is not
   supported"). Reasoning request shaping is now profile metadata

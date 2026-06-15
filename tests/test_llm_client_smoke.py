@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 import pytest
 from pydantic import BaseModel
 
-from penguiflow.llm.client import LLMClient, generate_structured
-from penguiflow.llm.profiles import ModelProfile
+from penguiflow.llm.client import LLMClient, _merge_fallback_profile, generate_structured
+from penguiflow.llm.errors import LLMRateLimitError
+from penguiflow.llm.fallback import ModelFallbackConfig
+from penguiflow.llm.profiles import ModelProfile, register_profile
 from penguiflow.llm.providers.base import Provider
 from penguiflow.llm.schema.plan import OutputMode
 from penguiflow.llm.types import CompletionResponse, LLMMessage, LLMRequest, TextPart, Usage
@@ -131,6 +133,50 @@ class ErrorProvider(Provider):
         raise RuntimeError("boom")
 
 
+class RateLimitThenSuccessProvider(Provider):
+    def __init__(self, model: str, first_rate_limited: bool = False) -> None:
+        self._model = model
+        self._first_rate_limited = first_rate_limited
+        self._calls = 0
+        self._profile = ModelProfile(
+            supports_schema_guided_output=True,
+            supports_tools=True,
+            supports_streaming=False,
+            default_output_mode="native",
+            native_structured_kind="openai_response_format",
+        )
+
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
+    @property
+    def profile(self) -> ModelProfile:
+        return self._profile
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    async def complete(
+        self,
+        request: LLMRequest,
+        *,
+        timeout_s: float | None = None,
+        cancel=None,
+        stream: bool = False,
+        on_stream_event=None,
+    ) -> CompletionResponse:
+        _ = (request, timeout_s, cancel, stream, on_stream_event)
+        self._calls += 1
+        if self._first_rate_limited and self._calls == 1:
+            raise LLMRateLimitError(message="429", provider="fake", status_code=429)
+        return CompletionResponse(
+            message=LLMMessage(role="assistant", parts=[TextPart(text='{"text":"ok","confidence":0.9}')]),
+            usage=Usage(input_tokens=2, output_tokens=1, total_tokens=3),
+        )
+
+
 @pytest.mark.asyncio
 async def test_llm_client_generate_native_mode_success() -> None:
     provider = FakeProvider(_model="gpt-4o", _provider_name="openai")
@@ -228,3 +274,138 @@ async def test_llm_client_generate_emits_error_path() -> None:
             Answer,
             max_retries=0,
         )
+
+
+def test_llm_client_rejects_provider_plus_fallback() -> None:
+    provider = FakeProvider(_model="gpt-4o", _provider_name="openai")
+    with pytest.raises(ValueError, match="fallback cannot be combined"):
+        LLMClient(
+            "openai/gpt-4o",
+            provider=provider,
+            profile=provider.profile,
+            fallback=ModelFallbackConfig(models=["openai/gpt-4o-mini"]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_llm_client_generate_uses_provider_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    providers = {
+        "openai/gpt-4o": RateLimitThenSuccessProvider("openai/gpt-4o", first_rate_limited=True),
+        "openai/gpt-4o-mini": RateLimitThenSuccessProvider("openai/gpt-4o-mini"),
+    }
+
+    import penguiflow.llm.client as client_mod
+
+    monkeypatch.setattr(client_mod, "create_provider", lambda model, **_: providers[model])
+    monkeypatch.setattr(client_mod, "get_profile", lambda model: providers[model].profile)
+
+    client = LLMClient(
+        "openai/gpt-4o",
+        fallback=ModelFallbackConfig(models=["openai/gpt-4o-mini"]),
+    )
+    result = await client.generate([LLMMessage(role="user", parts=[TextPart(text="hello")])], Answer)
+    assert result.data.text == "ok"
+    assert providers["openai/gpt-4o"]._calls == 1
+    assert providers["openai/gpt-4o-mini"]._calls == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_client_complete_raw_uses_provider_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    providers = {
+        "openai/gpt-4o": RateLimitThenSuccessProvider("openai/gpt-4o", first_rate_limited=True),
+        "openai/gpt-4o-mini": RateLimitThenSuccessProvider("openai/gpt-4o-mini"),
+    }
+
+    import penguiflow.llm.client as client_mod
+
+    monkeypatch.setattr(client_mod, "create_provider", lambda model, **_: providers[model])
+    monkeypatch.setattr(client_mod, "get_profile", lambda model: providers[model].profile)
+
+    client = LLMClient(
+        "openai/gpt-4o",
+        fallback=ModelFallbackConfig(models=["openai/gpt-4o-mini"]),
+    )
+    response = await client.complete_raw(
+        LLMRequest(model="openai/gpt-4o", messages=[LLMMessage(role="user", parts=[TextPart(text="raw")])])
+    )
+    assert response.message.text == '{"text":"ok","confidence":0.9}'
+
+
+def test_merge_fallback_profile_downgrades_when_backup_lacks_native() -> None:
+    register_profile(
+        "fakeco/native-primary",
+        ModelProfile(
+            supports_schema_guided_output=True,
+            default_output_mode="native",
+            native_structured_kind="openai_response_format",
+        ),
+    )
+    register_profile(
+        "fakeco/prompted-backup",
+        ModelProfile(
+            supports_schema_guided_output=False,
+            supports_tools=False,
+            default_output_mode="prompted",
+        ),
+    )
+    merged = _merge_fallback_profile(
+        "fakeco/native-primary",
+        ModelFallbackConfig(models=["fakeco/prompted-backup"]),
+    )
+    # The backup can't do native structured output, so the chain must not lead
+    # with native — it downgrades to prompted (no tool support either).
+    assert merged.supports_schema_guided_output is False
+    assert merged.default_output_mode == "prompted"
+
+
+def test_merge_fallback_profile_disables_native_on_mismatched_kind() -> None:
+    register_profile(
+        "fakeco/openai-kind",
+        ModelProfile(
+            supports_schema_guided_output=True,
+            default_output_mode="native",
+            native_structured_kind="openai_response_format",
+        ),
+    )
+    register_profile(
+        "fakeco/databricks-kind",
+        ModelProfile(
+            supports_schema_guided_output=True,
+            supports_tools=True,
+            default_output_mode="native",
+            native_structured_kind="databricks_constrained_decoding",
+        ),
+    )
+    merged = _merge_fallback_profile(
+        "fakeco/openai-kind",
+        ModelFallbackConfig(models=["fakeco/databricks-kind"]),
+    )
+    # Both support native, but the request formats are incompatible across the
+    # chain, so native is disabled and the chain falls back to tools.
+    assert merged.supports_schema_guided_output is False
+    assert merged.supports_tools is True
+    assert merged.default_output_mode == "tools"
+
+
+def test_merge_fallback_profile_keeps_native_for_same_family() -> None:
+    register_profile(
+        "fakeco/big",
+        ModelProfile(
+            supports_schema_guided_output=True,
+            default_output_mode="native",
+            native_structured_kind="openai_response_format",
+        ),
+    )
+    register_profile(
+        "fakeco/small",
+        ModelProfile(
+            supports_schema_guided_output=True,
+            default_output_mode="native",
+            native_structured_kind="openai_response_format",
+        ),
+    )
+    merged = _merge_fallback_profile(
+        "fakeco/big", ModelFallbackConfig(models=["fakeco/small"])
+    )
+    assert merged.supports_schema_guided_output is True
+    assert merged.default_output_mode == "native"
