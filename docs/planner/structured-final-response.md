@@ -220,9 +220,10 @@ unvalidated model output.**
 
 `final_response_model` is fully supported when the planner runs in native tool-calling mode
 (`tool_call_mode="native"`). In that mode the planner declares a synthetic `final_response`
-tool whose arguments are `answer` (text) + `structured` (your schema). The model finishes by
-*calling* that tool, so the structured payload arrives as **provider-validated function-call
-arguments** and validates on the first pass — no repair turn needed:
+tool that carries the `structured` object. The model finishes in a single turn by **writing
+the answer as plain text and calling that tool together**: the plain text streams to the user
+token-by-token (just like prompted mode), while the `structured` payload arrives as
+**provider-validated function-call arguments** and validates on the first pass — no repair turn:
 
 ```python
 planner = ReactPlanner(
@@ -231,14 +232,22 @@ planner = ReactPlanner(
     use_native_llm=True,         # native adapter (exposes provider function calling)
     tool_call_mode="native",
     final_response_model=Verdict,
+    stream_final_response=True,  # answer streams on the answer channel
 )
 ```
 
-The only behavioural difference: because the answer is delivered via a tool call rather than
-streamed plain text, the human-readable `answer` does **not** stream token-by-token in native
-structured-final runs. Everything else — validation, repair fallback, degradation, events — is
-identical to prompted mode. If the model ever finishes with plain text instead of calling the
-tool, the same bounded repair turn recovers the payload.
+So both modes stream the answer and both validate structured on the first pass. The finishing
+turn is the one place where the native planner intentionally emits plain text alongside a tool
+call; the streamed text is kept as the answer rather than being treated as a superseded
+preamble. The finish tool also accepts an optional `answer` field as a fallback for the rare
+turn where the model puts the answer in the call instead of as text; if a finish somehow
+arrives without a structured payload, the same bounded repair turn recovers it.
+
+> Native answer streaming depends on the model emitting text *and* the `final_response` call in
+> the same turn. Claude-family models do this reliably. A model that suppresses text when it
+> emits a tool call would instead return the answer via the tool's optional `answer` field —
+> still correct and still validated, but delivered in one chunk rather than streamed. Structured
+> validation is unaffected either way.
 
 ## Caveats
 

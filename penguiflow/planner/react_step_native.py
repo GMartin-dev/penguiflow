@@ -9,12 +9,20 @@ Mapping (Phase 5 design decisions D5.1/D5.5):
 - zero tool calls   → ``final_response`` with the content as the answer
 - one tool call     → direct tool action (args parsed from provider-validated JSON)
 - N tool calls      → ``parallel`` plan with one step per call (no join in v1)
-- content alongside tool calls → ``action.thought``
+- content alongside an intermediate tool call → ``action.thought`` (preamble)
 
-Streaming (D5.3 revised): the native prompt forbids text alongside tool
-calls, so content deltas stream token-by-token on the ``answer`` channel
-(parity with prompted mode). A disobedient preamble turn closes the answer
-stream with ``superseded: True`` and re-emits the text on ``thinking``.
+Structured finishing (``final_response_model``): the one deliberate exception
+to "no text alongside tool calls". When finishing, the model writes the answer
+as plain text AND calls the synthetic ``final_response`` tool carrying only the
+``structured`` object, in the same turn. We keep the streamed text as the answer
+and read ``structured`` from the call — so the answer still streams while the
+payload validates first-pass. See ``build_native_tools`` / ``FINISH_TOOL_NAME``.
+
+Streaming (D5.3 revised): content deltas stream token-by-token on the ``answer``
+channel (parity with prompted mode). An *intermediate* turn that streams a
+disobedient preamble before a tool call closes the answer stream with
+``superseded: True`` and re-emits the text on ``thinking``; a structured finish
+turn does not (its text is the real answer).
 """
 
 from __future__ import annotations
@@ -117,21 +125,25 @@ def build_native_tools(planner: Any) -> tuple[list[ToolSpec], dict[str, str]]:
             ToolSpec(
                 name=FINISH_TOOL_NAME,
                 description=(
-                    "Deliver your FINAL answer and END the run. Provide 'answer' "
-                    "(the complete human-readable reply) and 'structured' (a JSON "
-                    "object that validates against the required schema). Call this "
-                    "alone — never alongside other tools."
+                    "FINISH the run. Write your complete human-readable answer as "
+                    "plain text in the same turn (it streams to the user), and call "
+                    "this with 'structured' set to the matching schema object. Use "
+                    "the optional 'answer' field only if you did not write the answer "
+                    "as plain text. Do not call this alongside other tools."
                 ),
                 json_schema={
                     "type": "object",
                     "properties": {
+                        "structured": structured_schema,
                         "answer": {
                             "type": "string",
-                            "description": "Complete human-readable final answer.",
+                            "description": (
+                                "Fallback answer; normally write the answer as plain "
+                                "text instead so it streams."
+                            ),
                         },
-                        "structured": structured_schema,
                     },
-                    "required": ["answer", "structured"],
+                    "required": ["structured"],
                 },
             )
         )
@@ -264,9 +276,52 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
             raw_llm_response=content,
         )
 
-    # Tool turn. If the model disobeyed the no-preamble instruction and text
-    # already streamed to the answer channel, retract it: close the answer
-    # stream with the superseded marker and re-emit the text as thinking.
+    # Structured final answer (final_response_model). Detect the synthetic finish
+    # tool BEFORE the supersede logic below: a finishing turn legitimately streams
+    # the answer as plain text AND calls final_response with the structured object,
+    # so we KEEP the streamed text as the answer instead of retracting it. The
+    # tool carries only the machine-readable payload; the runtime's
+    # _ensure_structured_final validates it first try (no repair turn).
+    if getattr(planner, "_final_response_schema", None) is not None:
+        finish_call = next((c for c in tool_calls if c.name == FINISH_TOOL_NAME), None)
+        if finish_call is not None:
+            # Finishing ends the run, so any sibling calls in the same turn are
+            # dropped. The prompt tells the model to call final_response alone;
+            # log it so the rare violation is observable rather than silent.
+            if len(tool_calls) > 1:
+                logger.info(
+                    "native_finish_dropped_sibling_calls",
+                    extra={
+                        "dropped": [c.name for c in tool_calls if c is not finish_call],
+                        "action_seq": current_action_seq,
+                    },
+                )
+            finish_args = _parse_tool_args(finish_call.arguments_json, tool_name=finish_call.name)
+            # Prefer the streamed plain-text answer; fall back to an answer carried
+            # inside the tool call if the model put it there instead of as text.
+            fallback = finish_args.get("answer")
+            answer_text = content or (fallback if isinstance(fallback, str) else "")
+            if stream_allowed:
+                # Non-streaming providers hand back the whole answer at once; emit
+                # it so the answer channel still carries the text, then close it.
+                if answer_text and answer_chunks_emitted == 0:
+                    _enqueue_chunk(
+                        {"text": answer_text, "done": False, "phase": "answer", "channel": "answer"}
+                    )
+                _close_answer_stream(superseded=False)
+            final_args: dict[str, Any] = {"answer": answer_text, "raw_answer": answer_text}
+            if "structured" in finish_args:
+                final_args["structured"] = finish_args["structured"]
+            return PlannerAction(
+                next_node="final_response",
+                args=final_args,
+                thought="",
+                raw_llm_response=finish_call.arguments_json or None,
+            )
+
+    # Intermediate tool turn. If the model disobeyed the no-preamble instruction
+    # and text already streamed to the answer channel, retract it: close the
+    # answer stream with the superseded marker and re-emit the text as thinking.
     if stream_allowed and answer_chunks_emitted > 0:
         _close_answer_stream(superseded=True)
         if content:
@@ -278,27 +333,6 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
 
     def real_name(call: Any) -> str:
         return alias_to_name.get(call.name, call.name)
-
-    # Structured final answer: the model called the synthetic finish tool. Its
-    # provider-validated args ARE the structured payload, so we map straight to a
-    # final_response action with the structured field already populated. The
-    # runtime's _ensure_structured_final then validates it first try (no repair).
-    if getattr(planner, "_final_response_schema", None) is not None:
-        finish_call = next((c for c in tool_calls if c.name == FINISH_TOOL_NAME), None)
-        if finish_call is not None:
-            finish_args = _parse_tool_args(finish_call.arguments_json, tool_name=finish_call.name)
-            answer_text = finish_args.get("answer")
-            if not isinstance(answer_text, str):
-                answer_text = content or ""
-            final_args: dict[str, Any] = {"answer": answer_text, "raw_answer": answer_text}
-            if "structured" in finish_args:
-                final_args["structured"] = finish_args["structured"]
-            return PlannerAction(
-                next_node="final_response",
-                args=final_args,
-                thought=content,
-                raw_llm_response=finish_call.arguments_json or None,
-            )
 
     if len(tool_calls) == 1:
         call = tool_calls[0]

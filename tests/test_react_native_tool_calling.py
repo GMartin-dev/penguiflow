@@ -451,8 +451,10 @@ class TestNativeStructuredFinal:
         finish = [t for t in tools if t.name == FINISH_TOOL_NAME]
         assert len(finish) == 1
         props = finish[0].json_schema["properties"]
+        # The answer streams as plain text, so the tool only requires `structured`;
+        # `answer` is an optional fallback for turns that put it in the call.
         assert set(props) == {"answer", "structured"}
-        assert finish[0].json_schema["required"] == ["answer", "structured"]
+        assert finish[0].json_schema["required"] == ["structured"]
         # The structured property carries the model's own schema.
         assert "method" in props["structured"]["properties"]
 
@@ -514,6 +516,120 @@ class TestNativeStructuredFinal:
         # No corrective turn: only the single native turn was consumed.
         assert len(client.tool_declarations) == 1
         assert client.complete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_streamed_answer_with_structured_finish_is_not_superseded(self) -> None:
+        # The model finishes by streaming the answer as plain text AND calling
+        # final_response with only the structured object. The streamed answer must
+        # survive (not be retracted as a "preamble"), and structured still validates.
+        events: list[PlannerEvent] = []
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(
+                    content="It is 391.",
+                    tool_calls=[
+                        tool_call(
+                            FINISH_TOOL_NAME,
+                            {"structured": {"answer": 391, "method": "multiplication"}},
+                        )
+                    ],
+                )
+            ]
+        )
+        planner = make_native_planner(
+            client,
+            final_response_model=Verdict,
+            stream_final_response=True,
+            event_callback=events.append,
+            max_iters=3,
+        )
+        result = await planner.run("17*23?")
+
+        assert result.payload["raw_answer"] == "It is 391."
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+
+        answer_chunks = [
+            e
+            for e in events
+            if e.event_type == "llm_stream_chunk" and (e.extra or {}).get("channel") == "answer"
+        ]
+        assert answer_chunks, "expected the answer to stream on the answer channel"
+        # The streamed answer must NOT have been retracted as a superseded preamble.
+        assert not any((e.extra or {}).get("superseded") for e in events)
+
+    @pytest.mark.asyncio
+    async def test_finish_with_no_text_falls_back_to_answer_repair(self) -> None:
+        # Model calls final_response with ONLY structured and streams no text. The
+        # answer is empty, so the runtime's finish-answer repair fills it; structured
+        # (already valid) is preserved.
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(
+                    content="",
+                    tool_calls=[
+                        tool_call(FINISH_TOOL_NAME, {"structured": {"answer": 391, "method": "multiplication"}})
+                    ],
+                ),
+                "It is 391.",  # finish-answer repair reply (prompted .complete channel)
+            ]
+        )
+        planner = make_native_planner(client, final_response_model=Verdict, max_iters=3)
+        result = await planner.run("17*23?")
+
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+        assert result.payload["raw_answer"] == "It is 391."
+        assert len(client.complete_calls) == 1  # one answer-repair turn
+
+    @pytest.mark.asyncio
+    async def test_intermediate_preamble_still_superseded_with_schema(self) -> None:
+        # With the finish tool declared, an INTERMEDIATE turn that streams a preamble
+        # before a normal tool call must still be retracted (superseded). This guards
+        # against the finish-detection-before-supersede reorder leaking into tool turns.
+        TOOL_INVOCATIONS.clear()
+        events: list[PlannerEvent] = []
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(content="let me look that up", tool_calls=[tool_call("echo", {"text": "hi"})]),
+                NativeToolCallResult(
+                    content="Final answer.",
+                    tool_calls=[
+                        tool_call(FINISH_TOOL_NAME, {"structured": {"answer": 391, "method": "multiplication"}})
+                    ],
+                ),
+            ]
+        )
+        planner = make_native_planner(
+            client, final_response_model=Verdict, stream_final_response=True, event_callback=events.append, max_iters=4
+        )
+        result = await planner.run("17*23?")
+
+        assert ("echo", "hi") in TOOL_INVOCATIONS  # the intermediate tool ran
+        assert any((e.extra or {}).get("superseded") for e in events), "preamble should be superseded"
+        assert result.payload["raw_answer"] == "Final answer."
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+
+    @pytest.mark.asyncio
+    async def test_finish_drops_sibling_tool_calls(self) -> None:
+        # If the model emits final_response alongside another tool call, the run
+        # finishes and the sibling is dropped (not executed).
+        TOOL_INVOCATIONS.clear()
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(
+                    content="Done.",
+                    tool_calls=[
+                        tool_call(FINISH_TOOL_NAME, {"structured": {"answer": 391, "method": "multiplication"}}, "c1"),
+                        tool_call("echo", {"text": "hi"}, "c2"),
+                    ],
+                )
+            ]
+        )
+        planner = make_native_planner(client, final_response_model=Verdict, max_iters=3)
+        result = await planner.run("17*23?")
+
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+        assert result.payload["raw_answer"] == "Done."
+        assert ("echo", "hi") not in TOOL_INVOCATIONS  # sibling dropped, not executed
 
     @pytest.mark.asyncio
     async def test_invalid_finish_tool_payload_repairs(self) -> None:

@@ -765,7 +765,24 @@ Current date: {current_date}
     # ─────────────────────────────────────────────────────────────
     native_mode = tool_call_mode == "native"
 
-    if native_mode:
+    if native_mode and structured_final_schema is not None:
+        # Structured finishing is the one case where text + a tool call belong in
+        # the same turn (answer streams as text, `final_response` carries the
+        # structured object), so the finish rule below differs from plain native.
+        prompt_sections.append("""<output_format>
+You act through provider-native function calling: the tools in your catalog are declared
+to you directly by the API.
+
+- To act, CALL one or more tools (native function calls). Do not describe tool calls in text.
+- To run tools in parallel, emit MULTIPLE tool calls in a single turn.
+- For INTERMEDIATE steps, when you call tools emit ONLY the tool calls - NO accompanying
+  text, no preamble, no narration.
+- When you have enough information, FINISH by writing your complete answer as PLAIN TEXT
+  AND calling the `final_response` tool in the same turn (see finishing). This is the only
+  turn where plain text and a tool call go together.
+- Never emit a JSON action envelope (no next_node/args wrapper) - call tools natively instead.
+</output_format>""")
+    elif native_mode:
         prompt_sections.append("""<output_format>
 You act through provider-native function calling: the tools in your catalog are declared
 to you directly by the API.
@@ -859,12 +876,17 @@ Remember: The ONLY place for user-facing text is args.answer when next_node is "
     # ─────────────────────────────────────────────────────────────
     if native_mode and structured_final_schema is not None:
         prompt_sections.append("""<finishing>
-When you have gathered enough information to answer the query, FINISH by CALLING the
-`final_response` tool (see structured_final_response below for its required fields).
+When you have gathered enough information to answer the query, FINISH in a SINGLE turn
+by doing BOTH of these together:
 
-- Do NOT finish by replying with plain text - call `final_response` instead.
-- Call `final_response` ALONE, never together with other tools.
-- Write a full, helpful response in its "answer" field - not a summary or fragment.
+1. Write your complete, human-readable answer as plain text. This text streams to the
+   user, so write the full response here - not a summary or fragment.
+2. In the SAME turn, call the `final_response` tool with the structured object
+   (see structured_final_response below).
+
+This is the one and only time you emit plain text alongside a tool call. The plain
+text is the user-facing answer; the tool carries the machine-readable version. Do not
+put the answer only inside the tool, and do not call any other tool when finishing.
 </finishing>""")
     elif native_mode:
         prompt_sections.append("""<finishing>
@@ -914,16 +936,18 @@ Example finish:
     if structured_final_schema is not None and native_mode:
         schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
         prompt_sections.append(f"""<structured_final_response>
-To finish, CALL the `final_response` tool. Its arguments are:
-- "answer": your complete human-readable answer (a string).
-- "structured": a JSON object that validates against this JSON schema EXACTLY
-  (all required fields, correct types, no extra keys unless the schema allows them):
+To finish, write your human-readable answer as plain text AND call the `final_response`
+tool in the same turn. The tool's "structured" argument must be a JSON object that
+validates against this JSON schema EXACTLY (all required fields, correct types, no extra
+keys unless the schema allows them):
 
 {schema_text}
 
 Rules:
-- "answer" is the human-readable text; "structured" is the machine-readable version.
+- The plain-text you write IS the answer shown to the user; "structured" is the
+  machine-readable version of that same answer.
 - "structured" is a plain JSON object - do not wrap it in a string or markdown.
+- Do not repeat the full answer inside the tool; just provide "structured".
 - Call `final_response` only when you are ready to end the run.
 </structured_final_response>""")
     elif structured_final_schema is not None and not native_mode:
