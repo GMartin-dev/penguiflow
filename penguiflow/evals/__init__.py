@@ -24,6 +24,16 @@ from .api import (
     wrap_metric,
 )
 from .export import export_trace_dataset
+from .helpers import (
+    extract_node_sequence,
+    extract_step_args,
+    extract_step_subset,
+    extract_terminal_node,
+    llm_judge,
+    sequence_match,
+    step_args_match,
+    trajectory_subset_match,
+)
 from .inputs import load_query_suite, load_trace_ids
 from .runner import run_harness_eval
 from .sweep import run_manual_sweep
@@ -40,6 +50,14 @@ __all__ = [
     "collect_traces",
     "describe_metric",
     "export_trace_dataset",
+    "extract_node_sequence",
+    "extract_step_args",
+    "extract_step_subset",
+    "extract_terminal_node",
+    "llm_judge",
+    "sequence_match",
+    "step_args_match",
+    "trajectory_subset_match",
     "ensure_project_on_sys_path",
     "evaluate_dataset",
     "evaluate_dataset_from_spec_file",

@@ -92,6 +92,8 @@ Why this matters for ReAct planners:
 
 Use a deterministic, trace-aware metric first.
 
+For planner-native metrics, prefer `penguiflow.evals.helpers` inside a normal metric instead of ad hoc trace parsing.
+
 Recommended shape:
 
 - define with `@metric(...)`
@@ -99,10 +101,20 @@ Recommended shape:
 - return per-case `checks`
 - keep `feedback` concise and failure-oriented
 
+Rule of thumb:
+
+- use plain Python equality for trivial scalar checks
+- use `extract_node_sequence(...)` when you only need route/tool order
+- use `sequence_match(...)` for exact route or route-prefix checks
+- use `trajectory_subset_match(...)` when extra observed calls are acceptable but one expected route/tool pattern must appear
+- use `extract_step_args(...)` / `extract_step_subset(...)` plus `step_args_match(...)` for argument-level checks
+- use `llm_judge(...)` for qualitative outcome checks, not for basic routing validation
+
 Example skeleton:
 
 ```python
 from penguiflow.evals import metric
+from penguiflow.evals.helpers import extract_node_sequence, sequence_match, trajectory_subset_match
 
 
 @metric(
@@ -113,9 +125,14 @@ from penguiflow.evals import metric
     ],
 )
 def score(gold, pred, trace=None, pred_name=None, pred_trace=None):
+    tools = extract_node_sequence(pred_trace)
     checks = {
-        "starts_with_triage": True,
-        "uses_expected_tool": True,
+        "starts_with_triage": sequence_match(tools[:1], ["triage_query"], mode="strict"),
+        "uses_expected_tool": trajectory_subset_match(
+            pred_trace,
+            {"node_sequence": ["answer_general"]},
+            mode="subset",
+        ),
     }
     failed = [key for key, ok in checks.items() if not ok]
     return {
@@ -124,6 +141,101 @@ def score(gold, pred, trace=None, pred_name=None, pred_trace=None):
         "feedback": "all checks pass" if not failed else f"failed: {', '.join(failed)}",
     }
 ```
+
+Tiny qualitative example:
+
+```python
+import os
+
+from penguiflow.evals import metric
+from penguiflow.evals.helpers import llm_judge
+
+
+@metric(
+    name="User Satisfaction",
+    criteria=[{"id": "helpful_outcome", "label": "Helpful outcome"}],
+)
+async def satisfaction_metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+    del trace, pred_name, pred_trace
+    question = str(gold.get("question") or "") if isinstance(gold, dict) else ""
+    return await llm_judge(
+        prompt="Score whether the answer is helpful for the user's request.",
+        inputs={"question": question},
+        outputs={"answer": str(pred or "")},
+        model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+    )
+```
+
+Helper composition patterns:
+
+Missing expected node detection:
+
+```python
+from penguiflow.evals.helpers import trajectory_subset_match
+
+
+def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+    del gold, pred, trace, pred_name
+    found_expected_tool = trajectory_subset_match(
+        pred_trace,
+        {"node_sequence": ["recommend_fix"]},
+        mode="subset",
+    )
+    return {
+        "score": 1.0 if found_expected_tool else 0.0,
+        "checks": {"uses_recommend_fix": found_expected_tool},
+        "feedback": None if found_expected_tool else "Expected tool 'recommend_fix' was not used.",
+    }
+```
+
+Repeated-call arg validation:
+
+```python
+from penguiflow.evals.helpers import extract_step_args, step_args_match
+
+
+def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+    del gold, pred, trace, pred_name
+    observed = extract_step_args(pred_trace, node_name="search_documents")
+    matched = any(
+        step_args_match(actual, {"query": "architecture constraints"}, mode="subset")
+        for actual in observed
+    )
+    return {
+        "score": 1.0 if matched else 0.0,
+        "checks": {"searched_for_constraints": matched},
+        "feedback": None if matched else "No search_documents call used the expected query.",
+    }
+```
+
+Multiple expected arg specs for the same tool:
+
+```python
+from penguiflow.evals.helpers import extract_step_args, step_args_match
+
+
+def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+    del gold, pred, trace, pred_name
+    expected_specs = [
+        {"query": "architecture"},
+        {"query": "constraints"},
+    ]
+    observed = extract_step_args(pred_trace, node_name="search_documents")
+    checks = {
+        f"expected_search_{index}": any(
+            step_args_match(actual, expected, mode="subset") for actual in observed
+        )
+        for index, expected in enumerate(expected_specs, start=1)
+    }
+    score = sum(1.0 if ok else 0.0 for ok in checks.values()) / len(checks)
+    return {"score": score, "checks": checks}
+```
+
+Avoid:
+
+- exact-matching full raw trajectories
+- generic JSON containment helpers in metric code
+- using an LLM judge where one deterministic route check would do
 
 ## Step 5: debug the metric in Playground
 

@@ -116,6 +116,13 @@ Recommended rule style:
 - compare expected route/tool policy vs observed tool sequence,
 - avoid free-text answer matching as primary signal.
 
+Recommended helper style:
+
+- use `extract_node_sequence(...)` for stable route projection and tool-budget checks
+- use `sequence_match(...)` for route prefix checks like "must start with triage"
+- use `trajectory_subset_match(...)` for "expected tool appears somewhere in the run"
+- use `llm_judge(...)` only for qualitative outcome checks where deterministic routing checks are not enough
+
 Recommended metric shape:
 
 - define the metric with `@metric(...)`
@@ -130,8 +137,22 @@ This example now includes both:
 
 - `policy_metric` for the main pass-oriented policy baseline
 - `fail_metric_demo` for intentionally mixed/failing cases during Playground UI review
+- `satisfaction_metric` for a small qualitative example built on `llm_judge(...)`
 
 `policy_metric` is sync and `fail_metric_demo` is async; both are supported in `penguiflow eval evaluate --spec ...` and Playground Eval runs via `metric_spec`.
+
+Current helper composition in `metrics.py`:
+
+- `policy_metric`
+  - `sequence_match(tools[:1], ["triage_query"], mode="strict")`
+  - `trajectory_subset_match(pred_trace, {"node_sequence": [expected_terminal]}, mode="subset")`
+  - `extract_node_sequence(pred_trace)` for tool budget and concise feedback
+- `fail_metric_demo`
+  - same route helpers as `policy_metric`
+  - stricter budget to force reviewable failures
+- `satisfaction_metric`
+  - `llm_judge(...)` with `inputs={"question": ...}` and `outputs={"answer": ...}`
+  - model comes from the same `LLM_MODEL` env used by the example agent
 
 The demo spec lives at `examples/planner_enterprise_agent_v2/evals/fail_metric_demo_v1/evaluate.spec.json`.
 
