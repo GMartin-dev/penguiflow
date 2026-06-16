@@ -16,7 +16,12 @@ from penguiflow.llm.types import ToolCallPart
 from penguiflow.node import Node
 from penguiflow.planner import ReactPlanner
 from penguiflow.planner.models import PlannerEvent
-from penguiflow.planner.react_step_native import _parse_tool_args, resolve_native_eligibility
+from penguiflow.planner.react_step_native import (
+    FINISH_TOOL_NAME,
+    _parse_tool_args,
+    build_native_tools,
+    resolve_native_eligibility,
+)
 from penguiflow.registry import ModelRegistry
 
 
@@ -435,3 +440,111 @@ class TestDualModeConformance:
         assert result.payload["raw_answer"] == "final: hi"
         assert result.payload["structured"] is None
         assert result.payload["artifacts"] == result.payload["artifacts"]  # shape parity
+
+
+class TestNativeStructuredFinal:
+    """Native-mode structured final answers via the synthetic finish tool."""
+
+    def test_finish_tool_declared_only_when_model_set(self) -> None:
+        with_model = make_native_planner(StubNativeClient([]), final_response_model=Verdict)
+        tools, _ = build_native_tools(with_model)
+        finish = [t for t in tools if t.name == FINISH_TOOL_NAME]
+        assert len(finish) == 1
+        props = finish[0].json_schema["properties"]
+        assert set(props) == {"answer", "structured"}
+        assert finish[0].json_schema["required"] == ["answer", "structured"]
+        # The structured property carries the model's own schema.
+        assert "method" in props["structured"]["properties"]
+
+        without_model = make_native_planner(StubNativeClient([]))
+        tools2, _ = build_native_tools(without_model)
+        assert all(t.name != FINISH_TOOL_NAME for t in tools2)
+
+    def test_finish_tool_name_reserved_against_collision(self) -> None:
+        # A catalog tool literally named "final_response" must not steal the alias.
+        registry = ModelRegistry()
+        registry.register("final_response", Query, Query)
+        catalog = build_catalog([Node(echo, name="final_response")], registry)
+        planner = ReactPlanner(
+            llm_client=StubNativeClient([]),
+            catalog=catalog,
+            tool_call_mode="native",
+            final_response_model=Verdict,
+        )
+        tools, alias_to_name = build_native_tools(planner)
+        names = [t.name for t in tools]
+        # Exactly one tool keeps the reserved name (the synthetic finish tool),
+        # and the catalog tool was aliased away from it.
+        assert names.count(FINISH_TOOL_NAME) == 1
+        assert alias_to_name.get(FINISH_TOOL_NAME) != "final_response"
+
+    @pytest.mark.asyncio
+    async def test_finish_tool_call_yields_validated_structured_no_repair(self) -> None:
+        events: list[PlannerEvent] = []
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(
+                    content="",
+                    tool_calls=[
+                        tool_call(
+                            FINISH_TOOL_NAME,
+                            {
+                                "answer": "It is 391.",
+                                "structured": {"answer": 391, "method": "multiplication"},
+                            },
+                        )
+                    ],
+                )
+            ]
+        )
+        planner = make_native_planner(
+            client,
+            final_response_model=Verdict,
+            event_callback=events.append,
+            max_iters=3,
+        )
+        result = await planner.run("17*23?")
+
+        assert result.reason == "answer_complete"
+        assert result.payload["raw_answer"] == "It is 391."
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+        validated = [e for e in events if e.event_type == "final_response_structured_validated"]
+        assert len(validated) == 1
+        assert validated[0].extra["repaired"] is False
+        # No corrective turn: only the single native turn was consumed.
+        assert len(client.tool_declarations) == 1
+        assert client.complete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_finish_tool_payload_repairs(self) -> None:
+        events: list[PlannerEvent] = []
+        client = StubNativeClient(
+            [
+                NativeToolCallResult(
+                    content="",
+                    tool_calls=[
+                        tool_call(
+                            FINISH_TOOL_NAME,
+                            {
+                                "answer": "It is 391.",
+                                "structured": {"answer": "three-ninety-one", "method": "guessing"},
+                            },
+                        )
+                    ],
+                ),
+                # Corrective turn replies on the prompted .complete channel.
+                json.dumps({"answer": 391, "method": "multiplication"}),
+            ]
+        )
+        planner = make_native_planner(
+            client,
+            final_response_model=Verdict,
+            event_callback=events.append,
+            max_iters=3,
+        )
+        result = await planner.run("17*23?")
+
+        assert result.payload["structured"] == {"answer": 391, "method": "multiplication"}
+        repaired = [e for e in events if e.event_type == "final_response_structured_validated"]
+        assert repaired and repaired[0].extra["repaired"] is True
+        assert len(client.complete_calls) == 1  # one repair turn issued

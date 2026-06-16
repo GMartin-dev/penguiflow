@@ -94,6 +94,7 @@ nav:
       - Guardrails: planner/guardrails.md
       - Parallel & joins: planner/parallel-and-joins.md
       - Tooling: planner/tooling.md
+      - Structured final response: planner/structured-final-response.md
       - Rich output: planner/rich-output.md
       - Rich output extensions: planner/rich-output-extensions.md
       - Rich output with skills: planner/rich-output-skills.md

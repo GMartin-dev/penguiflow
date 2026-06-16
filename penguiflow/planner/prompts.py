@@ -857,7 +857,16 @@ Remember: The ONLY place for user-facing text is args.answer when next_node is "
     # ─────────────────────────────────────────────────────────────
     # FINISHING (CRITICAL)
     # ─────────────────────────────────────────────────────────────
-    if native_mode:
+    if native_mode and structured_final_schema is not None:
+        prompt_sections.append("""<finishing>
+When you have gathered enough information to answer the query, FINISH by CALLING the
+`final_response` tool (see structured_final_response below for its required fields).
+
+- Do NOT finish by replying with plain text - call `final_response` instead.
+- Call `final_response` ALONE, never together with other tools.
+- Write a full, helpful response in its "answer" field - not a summary or fragment.
+</finishing>""")
+    elif native_mode:
         prompt_sections.append("""<finishing>
 When you have gathered enough information to answer the query, reply with your complete,
 human-readable answer as plain text and make NO tool calls in that turn.
@@ -902,7 +911,22 @@ Example finish:
     # ─────────────────────────────────────────────────────────────
     # STRUCTURED FINAL RESPONSE (opt-in via final_response_model)
     # ─────────────────────────────────────────────────────────────
-    if structured_final_schema is not None and not native_mode:
+    if structured_final_schema is not None and native_mode:
+        schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
+        prompt_sections.append(f"""<structured_final_response>
+To finish, CALL the `final_response` tool. Its arguments are:
+- "answer": your complete human-readable answer (a string).
+- "structured": a JSON object that validates against this JSON schema EXACTLY
+  (all required fields, correct types, no extra keys unless the schema allows them):
+
+{schema_text}
+
+Rules:
+- "answer" is the human-readable text; "structured" is the machine-readable version.
+- "structured" is a plain JSON object - do not wrap it in a string or markdown.
+- Call `final_response` only when you are ready to end the run.
+</structured_final_response>""")
+    elif structured_final_schema is not None and not native_mode:
         schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
         prompt_sections.append(f"""<structured_final_response>
 When finishing (next_node "final_response"), args MUST ALSO include a "structured" object that

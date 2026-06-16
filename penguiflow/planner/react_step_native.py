@@ -33,6 +33,13 @@ logger = logging.getLogger("penguiflow.planner")
 
 _DOWNGRADE_FLAG = "native_tool_call_downgraded"
 
+# Reserved native tool name used to deliver a schema-validated final answer when
+# the planner is configured with ``final_response_model``. The model "calls" this
+# synthetic tool to finish, so the structured payload arrives as provider-validated
+# function-call args (no extra corrective turn needed). See
+# ``docs/planner/structured-final-response.md``.
+FINISH_TOOL_NAME = "final_response"
+
 
 def resolve_native_eligibility(planner: Any) -> str | None:
     """Return None when native mode can run, else a human-readable reason."""
@@ -83,6 +90,11 @@ def build_native_tools(planner: Any) -> tuple[list[ToolSpec], dict[str, str]]:
     tools: list[ToolSpec] = []
     alias_to_name: dict[str, str] = {}
     used: set[str] = set()
+    # When structured final answers are enabled, reserve the finish-tool name so a
+    # real catalog tool can never collide with it.
+    structured_schema = getattr(planner, "_final_response_schema", None)
+    if structured_schema is not None:
+        used.add(FINISH_TOOL_NAME)
     for spec in planner._specs:
         alias = _TOOL_NAME_UNSAFE_RE.sub("_", spec.name)[:128] or "tool"
         if alias in used:
@@ -98,6 +110,29 @@ def build_native_tools(planner: Any) -> tuple[list[ToolSpec], dict[str, str]]:
                 name=alias,
                 description=spec.desc,
                 json_schema=spec.args_model.model_json_schema(),
+            )
+        )
+    if structured_schema is not None:
+        tools.append(
+            ToolSpec(
+                name=FINISH_TOOL_NAME,
+                description=(
+                    "Deliver your FINAL answer and END the run. Provide 'answer' "
+                    "(the complete human-readable reply) and 'structured' (a JSON "
+                    "object that validates against the required schema). Call this "
+                    "alone — never alongside other tools."
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "description": "Complete human-readable final answer.",
+                        },
+                        "structured": structured_schema,
+                    },
+                    "required": ["answer", "structured"],
+                },
             )
         )
     return tools, alias_to_name
@@ -244,6 +279,27 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
     def real_name(call: Any) -> str:
         return alias_to_name.get(call.name, call.name)
 
+    # Structured final answer: the model called the synthetic finish tool. Its
+    # provider-validated args ARE the structured payload, so we map straight to a
+    # final_response action with the structured field already populated. The
+    # runtime's _ensure_structured_final then validates it first try (no repair).
+    if getattr(planner, "_final_response_schema", None) is not None:
+        finish_call = next((c for c in tool_calls if c.name == FINISH_TOOL_NAME), None)
+        if finish_call is not None:
+            finish_args = _parse_tool_args(finish_call.arguments_json, tool_name=finish_call.name)
+            answer_text = finish_args.get("answer")
+            if not isinstance(answer_text, str):
+                answer_text = content or ""
+            final_args: dict[str, Any] = {"answer": answer_text, "raw_answer": answer_text}
+            if "structured" in finish_args:
+                final_args["structured"] = finish_args["structured"]
+            return PlannerAction(
+                next_node="final_response",
+                args=final_args,
+                thought=content,
+                raw_llm_response=finish_call.arguments_json or None,
+            )
+
     if len(tool_calls) == 1:
         call = tool_calls[0]
         return PlannerAction(
@@ -267,6 +323,7 @@ async def step_native(planner: Any, trajectory: Trajectory) -> PlannerAction:
 
 
 __all__ = [
+    "FINISH_TOOL_NAME",
     "build_native_tools",
     "emit_downgrade_once",
     "resolve_native_eligibility",

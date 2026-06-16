@@ -84,7 +84,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `structured: dict | None`; `payload["raw_answer"]` and streaming are unchanged
   (answer streams first, `structured` validates on the assembled result).
   Default unset → byte-identical behavior. Provider-agnostic — live-verified on
-  Databricks through both the native and pydantic-ai transports.
+  Databricks through both the native and pydantic-ai transports. In native
+  tool-calling mode (`tool_call_mode="native"`) the planner now declares a
+  synthetic `final_response` tool (`answer` + `structured`), so the model
+  delivers the structured payload as provider-validated function-call arguments
+  and it validates on the first pass instead of relying on a repair turn; the
+  human-readable answer is delivered via that call rather than streamed
+  token-by-token.
 - **pydantic-ai transport (opt-in)**: `create_native_adapter(transport="pydantic-ai")`
   (or `NativeLLMAdapter(..., transport=...)`) routes completions through
   pydantic-ai's direct model layer behind the existing `Provider` seam — same
