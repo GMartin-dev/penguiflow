@@ -86,8 +86,9 @@ async def t1_happy_path() -> None:
         return
 
     structured = result.payload.get("structured")
+    raw_preview = str(result.payload.get("raw_answer"))[:60]
     record("run finished answer_complete", result.reason == "answer_complete", f"reason={result.reason}")
-    record("raw_answer present", bool(result.payload.get("raw_answer")), f"raw={str(result.payload.get('raw_answer'))[:60]!r}")
+    record("raw_answer present", bool(result.payload.get("raw_answer")), f"raw={raw_preview!r}")
     record(
         "structured payload validated",
         isinstance(structured, dict) and structured.get("answer") == 391,
