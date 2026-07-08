@@ -7,6 +7,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## 3.11.0 — 2026-07-08
 
+### Fixed
+- Databricks Claude Opus 4.8 reasoning: requests with `reasoning_effort` sent a
+  thinking budget that Databricks rejects with 400 ("thinking.type.enabled is not
+  supported"). Reasoning request shaping is now profile metadata
+  (`ModelProfile.reasoning_request_style`) with model-name heuristics as fallback;
+  the new `databricks-claude-opus-4-8` profile routes to adaptive thinking +
+  `output_config.effort` (live-verified) and marks temperature unsupported
+  (Databricks rejects the parameter for this model — live-verified).
+
 ### Added
 - **Uniform built-in LLM fallback**: rate-limit (`429`) fallback is now applied at
   every PenguiFlow-managed client seam, not just the native transport. The
