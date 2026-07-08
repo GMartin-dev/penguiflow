@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from . import prompts
-from .llm import _coerce_llm_response, _LiteLLMJSONClient
+from .llm import _coerce_llm_response, supports_callback_streaming
 from .migration import normalize_action_with_debug
 from .models import PlannerAction, PlannerEvent
 from .react_utils import _serialize_validation_errors
@@ -35,6 +35,19 @@ def _prepend_system_message(messages: list[dict[str, str]], content: str) -> lis
 
 
 async def step(planner: Any, trajectory: Trajectory) -> PlannerAction:
+    if getattr(planner, "_tool_call_mode", "prompted") == "native":
+        from .react_step_native import (
+            emit_downgrade_once,
+            resolve_native_eligibility,
+            step_native,
+        )
+
+        ineligible_reason = resolve_native_eligibility(planner)
+        if ineligible_reason is None:
+            return await step_native(planner, trajectory)
+        emit_downgrade_once(planner, trajectory, ineligible_reason)
+        # Fall through to the prompted wire format below.
+
     had_pending_steering = bool(trajectory.steering_inputs)
 
     def _consume_steering_inputs() -> None:
@@ -75,13 +88,12 @@ async def step(planner: Any, trajectory: Trajectory) -> PlannerAction:
             response_format = planner._action_schema
 
         # Native LLM adapter supports the same callback-based streaming contract
-        # as the LiteLLM client. Keep the gating here so templates can enable/disable
-        # streaming consistently via `stream_final_response`.
-        from penguiflow.llm.protocol import NativeLLMAdapter
-
+        # as the LiteLLM client (and the fallback wrappers that delegate to either).
+        # Keep the gating here so templates can enable/disable streaming consistently
+        # via `stream_final_response`.
         stream_allowed = (
             planner._stream_final_response
-            and isinstance(planner._client, (_LiteLLMJSONClient, NativeLLMAdapter))
+            and supports_callback_streaming(planner._client)
             and (
                 response_format is None
                 or (
@@ -259,7 +271,7 @@ async def step(planner: Any, trajectory: Trajectory) -> PlannerAction:
                                 )
                             )
         try:
-            if isinstance(planner._client, (_LiteLLMJSONClient, NativeLLMAdapter)) and getattr(
+            if supports_callback_streaming(planner._client) and getattr(
                 planner, "_use_native_reasoning", True
             ):
                 llm_result = await planner._client.complete(

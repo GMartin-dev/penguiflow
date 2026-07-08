@@ -21,6 +21,7 @@ PROFILES: dict[str, ModelProfile] = {
     # OpenAI GPT-5 Series on Databricks (January 2026)
     # ==========================================================================
     "databricks-gpt-5-5-pro": ModelProfile(
+        supports_native_tool_calls=False,  # chat-completions rejects tools; needs Responses API
         supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
@@ -37,6 +38,7 @@ PROFILES: dict[str, ModelProfile] = {
         max_output_tokens=128000,
     ),
     "databricks-gpt-5-5": ModelProfile(
+        supports_native_tool_calls=False,  # chat-completions rejects tools; needs Responses API
         supports_temperature=False,  # GPT-5 reasoning: only the default temperature
         supports_schema_guided_output=True,
         supports_json_only_output=True,
@@ -204,10 +206,12 @@ PROFILES: dict[str, ModelProfile] = {
         supports_tools=True,
         supports_reasoning=True,  # Adaptive thinking + output_config.effort
         supports_streaming=True,
+        supports_image_input=True,
         default_output_mode="native",
         native_structured_kind="databricks_constrained_decoding",
         schema_transformer_name="DatabricksJsonSchemaTransformer",
         reasoning_request_style="adaptive_effort",
+        preferred_transport="native",  # generic transport cannot parse reasoning content blocks
         strict_mode_default=True,
         max_tools=MAX_TOOLS,
         max_schema_keys=MAX_SCHEMA_KEYS,
@@ -221,10 +225,12 @@ PROFILES: dict[str, ModelProfile] = {
         supports_tools=True,
         supports_reasoning=True,  # Supports extended thinking
         supports_streaming=True,
+        supports_image_input=True,
         default_output_mode="native",
         native_structured_kind="databricks_constrained_decoding",
         schema_transformer_name="DatabricksJsonSchemaTransformer",
         reasoning_request_style="adaptive_effort",
+        preferred_transport="native",  # generic transport cannot parse reasoning content blocks
         strict_mode_default=True,
         max_tools=MAX_TOOLS,
         max_schema_keys=MAX_SCHEMA_KEYS,

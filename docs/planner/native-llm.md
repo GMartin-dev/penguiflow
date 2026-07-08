@@ -11,6 +11,9 @@ Use the native LLM layer when you want:
 - optional native reasoning extraction and reasoning streaming callbacks,
 - a single internal implementation surface you can instrument and test.
 
+If you also configure `llm_fallback=...`, native planners already participate in
+the shared rate-limit fallback path, including native tool-calling mode.
+
 ## Non-goals / boundaries
 
 - This page does not document every provider’s environment variables or auth story.
@@ -162,4 +165,3 @@ def build_planner() -> ReactPlanner:
 - Are your model ids provider-qualified consistently (`openai/...`, `anthropic/...`, etc.)?
 - Are you seeing schema downgrade logs (indicating provider incompatibility with the schema)?
 - Are you relying on native reasoning content for behavior (don’t; it is observability-only)?
-

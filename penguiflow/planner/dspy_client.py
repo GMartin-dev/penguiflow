@@ -68,6 +68,16 @@ class DSPyLLMClient:
         timeout_s: float = 360.0,
         max_tokens: int = 4096,
     ) -> None:
+        import warnings
+
+        warnings.warn(
+            "DSPyLLMClient is deprecated and unmaintained; it is no longer part of "
+            "PenguiFlow's supported LLM surface and does not participate in built-in "
+            "rate-limit fallback (llm_fallback). Use the native LLM layer (default) or "
+            "transport='pydantic-ai' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._llm = llm
         self._output_schema = output_schema  # Will default to PlannerAction if None
         self._temperature = temperature
@@ -175,7 +185,7 @@ class DSPyLLMClient:
         }
         return type(f"{schema_name}Signature", (dspy.Signature,), attrs)
 
-    def _messages_to_text(self, messages: Sequence[Mapping[str, str]]) -> str:
+    def _messages_to_text(self, messages: Sequence[Mapping[str, Any]]) -> str:
         """Convert OpenAI-style messages to a single text prompt.
 
         Args:
@@ -201,8 +211,11 @@ class DSPyLLMClient:
     async def complete(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
+        stream: bool = False,
+        on_stream_chunk: Any = None,
+        on_reasoning_chunk: Any = None,
     ) -> tuple[str, float]:
         """Generate completion with structured output via DSPy.
 
@@ -218,6 +231,8 @@ class DSPyLLMClient:
             TimeoutError: If the call exceeds timeout_s
         """
         import dspy
+
+        del stream, on_stream_chunk, on_reasoning_chunk
 
         self._ensure_dspy_initialized()
 

@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from ..llm.types import AudioPart, ContentPart, ImagePart
 from .migration import dump_action_legacy, normalize_action
 from .models import PlannerAction
 
@@ -97,6 +98,27 @@ def _safe_json_payload(value: Any) -> Any:
         return json.loads(json.dumps(value, ensure_ascii=False))
     except (TypeError, ValueError):
         return None
+
+
+def _input_part_stub(part: ContentPart) -> dict[str, Any] | None:
+    if isinstance(part, ImagePart):
+        return {
+            "type": "image",
+            "media_type": part.media_type,
+            "bytes": len(part.data),
+            "detail": part.detail,
+        }
+    if isinstance(part, AudioPart):
+        return {
+            "type": "audio",
+            "media_type": part.media_type,
+            "bytes": len(part.data),
+        }
+    return None
+
+
+def _input_part_stubs(parts: Sequence[ContentPart]) -> list[dict[str, Any]]:
+    return [stub for part in parts if (stub := _input_part_stub(part)) is not None]
 
 
 def coerce_background_results(raw: Any) -> dict[str, BackgroundTaskResult]:
@@ -188,6 +210,7 @@ class Trajectory:
     query: str
     llm_context: Mapping[str, Any] | None = None
     tool_context: dict[str, Any] | None = None
+    input_parts: tuple[ContentPart, ...] = ()
     artifacts: dict[str, Any] = field(default_factory=dict)
     sources: list[Mapping[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -230,6 +253,7 @@ class Trajectory:
             "query": self.query,
             "llm_context": dict(self.llm_context or {}),
             "tool_context": tool_context,
+            "input_parts": _input_part_stubs(self.input_parts),
             "artifacts": dict(self.artifacts),
             "sources": [dict(src) for src in self.sources],
             "metadata": dict(self.metadata),
@@ -297,6 +321,9 @@ class Trajectory:
         facts: dict[str, Any] = {}
         pending: list[str] = []
         last_observation = None
+        input_part_stubs = _input_part_stubs(self.input_parts)
+        if input_part_stubs:
+            facts["input_parts"] = input_part_stubs
         if self.steps:
             last_step = self.steps[-1]
             if last_step.observation is not None:

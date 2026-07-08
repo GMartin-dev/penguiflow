@@ -7,12 +7,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from penguiflow.llm.errors import LLMInvalidRequestError
+from penguiflow.llm.fallback import ModelFallbackConfig
+from penguiflow.llm.profiles import ModelProfile
 from penguiflow.llm.protocol import (
+    INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
     NativeLLMAdapter,
     create_native_adapter,
 )
 from penguiflow.llm.types import (
+    AudioPart,
     CompletionResponse,
+    ImagePart,
     LLMMessage,
     TextPart,
     ToolCallPart,
@@ -27,6 +33,7 @@ class TestNativeLLMAdapter:
         provider = MagicMock()
         provider.model = "test-model"
         provider.provider_name = "test"
+        provider.profile = ModelProfile()
         provider.complete = AsyncMock(
             return_value=CompletionResponse(
                 message=LLMMessage(role="assistant", parts=[TextPart(text='{"result": "ok"}')]),
@@ -129,6 +136,116 @@ class TestNativeLLMAdapter:
             call_args = mock_provider.complete.call_args[0][0]
             assert call_args.structured_output is not None
             assert call_args.structured_output.name == "test_schema"
+
+    @pytest.mark.asyncio
+    async def test_image_part_reaches_provider_when_profile_supports_it(self, mock_provider: MagicMock) -> None:
+        mock_provider.profile = ModelProfile(supports_image_input=True)
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("test-model")
+            await adapter.complete(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            TextPart(text="Describe this"),
+                            ImagePart(data=b"\x89PNG", media_type="image/png"),
+                        ],
+                    }
+                ]
+            )
+
+            request = mock_provider.complete.call_args[0][0]
+            assert isinstance(request.messages[0].parts[1], ImagePart)
+
+    @pytest.mark.asyncio
+    async def test_unsupported_image_input_fails_loudly(self, mock_provider: MagicMock) -> None:
+        mock_provider.profile = ModelProfile(supports_image_input=False)
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("test-model")
+            with pytest.raises(LLMInvalidRequestError, match="does not support image input"):
+                await adapter.complete(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [ImagePart(data=b"\x89PNG", media_type="image/png")],
+                        }
+                    ]
+                )
+            mock_provider.complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inline_multimodal_threshold_fails_loudly(self, mock_provider: MagicMock) -> None:
+        mock_provider.profile = ModelProfile(supports_image_input=True)
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("test-model")
+            with pytest.raises(LLMInvalidRequestError, match="inline limit"):
+                await adapter.complete(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                ImagePart(
+                                    data=b"x" * (INLINE_MULTIMODAL_DATA_LIMIT_BYTES + 1),
+                                    media_type="image/png",
+                                )
+                            ],
+                        }
+                    ]
+                )
+            mock_provider.complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inline_multimodal_threshold_is_configurable(self, mock_provider: MagicMock) -> None:
+        mock_provider.profile = ModelProfile(supports_image_input=True)
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("test-model", multimodal_inline_data_limit_bytes=4)
+            await adapter.complete(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [ImagePart(data=b"1234", media_type="image/png")],
+                    }
+                ]
+            )
+            with pytest.raises(LLMInvalidRequestError, match="4 byte inline limit"):
+                await adapter.complete(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [ImagePart(data=b"12345", media_type="image/png")],
+                        }
+                    ]
+                )
+
+    def test_negative_inline_multimodal_threshold_rejected(self) -> None:
+        with pytest.raises(ValueError, match="multimodal_inline_data_limit_bytes"):
+            NativeLLMAdapter("test-model", multimodal_inline_data_limit_bytes=-1)
+
+    @pytest.mark.asyncio
+    async def test_unsupported_audio_input_fails_loudly(self, mock_provider: MagicMock) -> None:
+        mock_provider.profile = ModelProfile(supports_audio_input=False)
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("test-model")
+            with pytest.raises(LLMInvalidRequestError, match="does not support audio input"):
+                await adapter.complete(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [AudioPart(data=b"RIFF", media_type="audio/wav")],
+                        }
+                    ]
+                )
+            mock_provider.complete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_complete_with_json_object_format(self, mock_provider: MagicMock) -> None:
@@ -666,6 +783,9 @@ class TestCreateNativeAdapter:
                 streaming_enabled=True,
                 use_native_reasoning=True,
                 reasoning_effort=None,
+                trace_sink=None,
+                transport=None,
+                multimodal_inline_data_limit_bytes=INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
             )
 
     def test_create_with_dict_config(self) -> None:
@@ -686,6 +806,9 @@ class TestCreateNativeAdapter:
                 streaming_enabled=True,
                 use_native_reasoning=True,
                 reasoning_effort=None,
+                trace_sink=None,
+                transport=None,
+                multimodal_inline_data_limit_bytes=INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
             )
 
     def test_create_with_nim_dict_config(self) -> None:
@@ -709,7 +832,22 @@ class TestCreateNativeAdapter:
                 streaming_enabled=True,
                 use_native_reasoning=True,
                 reasoning_effort=None,
+                trace_sink=None,
+                transport=None,
+                multimodal_inline_data_limit_bytes=INLINE_MULTIMODAL_DATA_LIMIT_BYTES,
             )
+
+    def test_create_with_dict_config_multimodal_limit(self) -> None:
+        with patch("penguiflow.llm.protocol.NativeLLMAdapter") as mock_adapter:
+            create_native_adapter(
+                {
+                    "model": "gpt-4o",
+                    "multimodal_inline_data_limit_bytes": 1234,
+                }
+            )
+
+            call_kwargs = mock_adapter.call_args.kwargs
+            assert call_kwargs["multimodal_inline_data_limit_bytes"] == 1234
 
     def test_create_with_api_base_alias(self) -> None:
         with patch("penguiflow.llm.protocol.NativeLLMAdapter") as mock_adapter:
@@ -748,6 +886,17 @@ class TestCreateNativeAdapter:
 
             call_kwargs = mock_adapter.call_args[1]
             assert call_kwargs.get("custom_param") == "value"
+
+    def test_create_with_fallback_threads_multimodal_limit(self) -> None:
+        with patch("penguiflow.llm.fallback.FallbackLLMClient") as mock_fallback:
+            create_native_adapter(
+                "gpt-4o",
+                fallback=ModelFallbackConfig(models=["gpt-4o-mini"]),
+                multimodal_inline_data_limit_bytes=2048,
+            )
+
+            call_kwargs = mock_fallback.call_args.kwargs
+            assert call_kwargs["multimodal_inline_data_limit_bytes"] == 2048
 
 
 class TestNativeLLMAdapterStreaming:
@@ -1104,3 +1253,37 @@ class TestNativeLLMAdapterCost:
             content, cost = await adapter.complete(messages=[{"role": "user", "content": "Hello"}])
 
             assert cost == 0.0
+
+    @pytest.mark.asyncio
+    async def test_estimated_cost_in_native_tool_call_mode_when_usage_is_zero(self) -> None:
+        """Native tool-calling should estimate cost when a priced provider returns 0/0 usage."""
+        mock_provider = MagicMock()
+        mock_provider.model = "databricks-claude-opus-4-6"
+        mock_provider.provider_name = "databricks"
+        mock_provider.complete = AsyncMock(
+            return_value=CompletionResponse(
+                message=LLMMessage(
+                    role="assistant",
+                    parts=[
+                        ToolCallPart(
+                            name="resolve_analysis_scope",
+                            arguments_json='{"advertiser":"Tubi","period_grain":"quarter","period_value":"2026-Q1"}',
+                            call_id="call_1",
+                        )
+                    ],
+                ),
+                usage=Usage.zero(),
+                reasoning_content="check scope",
+            )
+        )
+
+        with patch("penguiflow.llm.protocol.create_provider") as mock_create:
+            mock_create.return_value = mock_provider
+
+            adapter = NativeLLMAdapter("databricks-claude-opus-4-6")
+            result = await adapter.complete_with_tools(
+                messages=[{"role": "user", "content": "Analyze Tubi for Q1 2026"}],
+                tools=[],
+            )
+
+            assert result.cost > 0.0

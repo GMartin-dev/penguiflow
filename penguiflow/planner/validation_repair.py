@@ -20,6 +20,7 @@ from . import prompts
 from .llm import _coerce_llm_response
 from .migration import try_normalize_action
 from .models import PlannerAction, PlannerEvent
+from .react_utils import _serialize_validation_errors
 from .trajectory import Trajectory
 
 logger = logging.getLogger("penguiflow.planner")
@@ -747,6 +748,169 @@ def _parse_finish_repair_response(raw: str) -> str | None:
             )
 
     return None
+
+
+def _strip_json_fences(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def _parse_structured_repair_response(raw: str) -> Any:
+    """Parse the corrective-turn reply into a candidate structured payload."""
+    text = _strip_json_fences(raw)
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except (TypeError, ValueError):
+            return None
+    # Accept either the bare object or a {"structured": {...}} wrapper.
+    if isinstance(parsed, dict) and set(parsed) == {"structured"}:
+        return parsed["structured"]
+    return parsed
+
+
+async def _ensure_structured_final(
+    *,
+    trajectory: Trajectory,
+    action: PlannerAction,
+    final_response_model: type[BaseModel],
+    final_response_schema: Mapping[str, Any],
+    retries: int,
+    build_messages: Callable[[Trajectory], Awaitable[list[dict[str, str]]]],
+    client: Any,
+    cost_tracker: Any,
+    emit_event: Callable[[PlannerEvent], None],
+    time_source: Callable[[], float],
+    action_seq: int,
+) -> None:
+    """Validate (and, if needed, repair) the finish action's structured payload.
+
+    Mutates ``action.args`` in place:
+    - On success: ``args["structured"]`` holds the schema-validated payload
+      (json-mode dump of the validated model instance).
+    - On exhaustion: ``args["structured"]`` is REMOVED (the payload field
+      never carries unvalidated data) and a warning is appended to
+      ``args["warnings"]`` so the degradation is visible in the final payload
+      and via the ``final_response_structured_degraded`` event.
+    """
+
+    def _validate(candidate: Any) -> tuple[dict[str, Any] | None, str | None]:
+        if candidate is None:
+            return None, "structured payload missing from final_response args"
+        try:
+            instance = final_response_model.model_validate(candidate)
+        except ValidationError as exc:
+            return None, _serialize_validation_errors(exc)
+        return instance.model_dump(mode="json"), None
+
+    validated, error = _validate(action.args.get("structured"))
+    if validated is not None:
+        action.args["structured"] = validated
+        emit_event(
+            PlannerEvent(
+                event_type="final_response_structured_validated",
+                ts=time_source(),
+                trajectory_step=len(trajectory.steps),
+                extra={"model": final_response_model.__name__, "action_seq": action_seq, "repaired": False},
+            )
+        )
+        return
+
+    answer = action.answer_text()
+    for attempt in range(1, max(0, retries) + 1):
+        emit_event(
+            PlannerEvent(
+                event_type="final_response_structured_repair_attempt",
+                ts=time_source(),
+                trajectory_step=len(trajectory.steps),
+                error=(error or "")[:500],
+                extra={
+                    "model": final_response_model.__name__,
+                    "attempt": attempt,
+                    "action_seq": action_seq,
+                },
+            )
+        )
+        repair_prompt = prompts.render_structured_repair_prompt(
+            schema=final_response_schema,
+            error=error or "structured payload missing",
+            answer=answer,
+        )
+        base_messages = await build_messages(trajectory)
+        messages = [*base_messages, {"role": "user", "content": repair_prompt}]
+        try:
+            llm_result = await client.complete(
+                messages=messages,
+                response_format={"type": "json_object"},
+                stream=False,
+                on_stream_chunk=None,
+            )
+        except Exception as exc:  # noqa: BLE001 - repair must never kill the run
+            logger.warning(
+                "structured_repair_llm_error",
+                extra={"attempt": attempt, "error": str(exc)[:300]},
+            )
+            break
+        raw, cost = _coerce_llm_response(llm_result)
+        cost_tracker.record_main_call(cost)
+
+        candidate = _parse_structured_repair_response(raw)
+        validated, error = _validate(candidate)
+        if validated is not None:
+            action.args["structured"] = validated
+            emit_event(
+                PlannerEvent(
+                    event_type="final_response_structured_validated",
+                    ts=time_source(),
+                    trajectory_step=len(trajectory.steps),
+                    extra={
+                        "model": final_response_model.__name__,
+                        "action_seq": action_seq,
+                        "repaired": True,
+                        "attempt": attempt,
+                    },
+                )
+            )
+            return
+
+    # Exhausted: strip the invalid payload and surface the degradation loudly.
+    action.args.pop("structured", None)
+    warning = (
+        f"Structured final response failed validation against "
+        f"{final_response_model.__name__} after {max(0, retries)} repair attempt(s); "
+        "payload.structured is omitted."
+    )
+    warnings = action.args.get("warnings")
+    if isinstance(warnings, list):
+        warnings.append(warning)
+    else:
+        action.args["warnings"] = [warning]
+    logger.warning(
+        "final_response_structured_degraded",
+        extra={"model": final_response_model.__name__, "error": (error or "")[:300]},
+    )
+    emit_event(
+        PlannerEvent(
+            event_type="final_response_structured_degraded",
+            ts=time_source(),
+            trajectory_step=len(trajectory.steps),
+            error=(error or "")[:500],
+            extra={"model": final_response_model.__name__, "action_seq": action_seq},
+        )
+    )
 
 
 async def _attempt_finish_repair(

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -56,6 +57,8 @@ if TYPE_CHECKING:
 DatabricksTokenProvider = Callable[[], str | Awaitable[str]]
 DatabricksAuthMode = str
 
+
+logger = logging.getLogger("penguiflow.llm.providers.databricks")
 
 class DatabricksProvider(OpenAICompatibleProvider):
     """Databricks provider using OpenAI-compatible API.
@@ -405,6 +408,7 @@ class DatabricksProvider(OpenAICompatibleProvider):
         usage: Usage | None = None
         finish_reason: str | None = None
         reasoning_acc: list[str] = []
+        saw_redacted_reasoning = False
 
         try:
             async with asyncio.timeout(timeout):
@@ -453,14 +457,29 @@ class DatabricksProvider(OpenAICompatibleProvider):
                                 on_stream_event(StreamEvent(delta_text=item["text"]))
                             elif item_type in ("reasoning", "thinking", "thought"):
                                 summary = item.get("summary")
+                                emitted_reasoning = False
                                 if isinstance(summary, list):
                                     for s in summary:
                                         if isinstance(s, dict) and isinstance(s.get("text"), str) and s["text"]:
+                                            emitted_reasoning = True
                                             reasoning_acc.append(s["text"])
                                             on_stream_event(StreamEvent(delta_reasoning=s["text"]))
-                                elif isinstance(item.get("text"), str) and item["text"]:
+                                if not emitted_reasoning and isinstance(item.get("text"), str) and item["text"]:
+                                    emitted_reasoning = True
                                     reasoning_acc.append(item["text"])
                                     on_stream_event(StreamEvent(delta_reasoning=item["text"]))
+                                if not emitted_reasoning and not saw_redacted_reasoning:
+                                    # Verified live 2026-06-12 (Opus 4.7 AND 4.8, adaptive
+                                    # thinking): the route returns reasoning blocks whose
+                                    # summary_text is EMPTY with only a cryptographic
+                                    # signature - thinking happens server-side but its
+                                    # content is redacted. Nothing visible to emit; there
+                                    # is no output_config.summary knob (400) to change it.
+                                    saw_redacted_reasoning = True
+                                    logger.info(
+                                        "databricks_reasoning_redacted_by_route",
+                                        extra={"model": self._model},
+                                    )
 
                     # If we already parsed reasoning blocks from a list-shaped delta content,
                     # don't double-emit via the generic OpenAI delta extractor.

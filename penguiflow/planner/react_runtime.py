@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ValidationError
 
 from ..catalog import NodeSpec, ToolLoadingMode
+from ..llm.types import ContentPart
 from ..rich_output.tools import RICH_OUTPUT_RENDER_TOOL_NAMES
 from ..skills.models import SkillQuery
 from ..skills.provider import build_skill_capability_context
@@ -553,6 +554,8 @@ def _apply_visible_catalog(planner: Any, visible_specs: Sequence[NodeSpec]) -> N
         extra=getattr(planner, "_system_prompt_extra", None),
         planning_hints=hints_payload,
         tool_examples=getattr(planner, "_tool_examples_config", None),
+        structured_final_schema=getattr(planner, "_final_response_schema", None),
+        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
     )
 
     guardrail_context = getattr(planner, "_guardrail_context", None)
@@ -960,6 +963,7 @@ async def run(
     planner: Any,
     query: str,
     *,
+    input_parts: Sequence[ContentPart] | None = None,
     llm_context: Mapping[str, Any] | None = None,
     context_meta: Mapping[str, Any] | None = None,
     tool_context: Mapping[str, Any] | None = None,
@@ -994,6 +998,7 @@ async def run(
         query=query,
         llm_context=cleaned_llm_context,
         tool_context=normalised_tool_context,
+        input_parts=tuple(input_parts or ()),
     )
     if extracted_results:
         trajectory.background_results.update(extracted_results)
@@ -1267,6 +1272,12 @@ async def _handle_finish_action(
                 "finish_repair_failed",
                 extra={"thought": action.thought},
             )
+
+    # Structured final answers (final_response_model): validate args["structured"]
+    # with a bounded corrective-turn repair; strips the field on exhaustion so
+    # payload.structured never carries unvalidated data.
+    if getattr(planner, "_final_response_model", None) is not None:
+        await planner._ensure_structured_final(trajectory, action, action_seq=action_seq)
 
     candidate_answer = action.args if action.args else last_observation
     if isinstance(candidate_answer, MutableMapping):
@@ -2117,9 +2128,9 @@ async def run_loop(
 
                                 if revalidation_error is not None:
                                     # Fall through to repair message
-                                    repair_msg = prompts.render_arg_repair_message(
-                                        spec.name,
+                                    repair_msg = prompts.render_arg_repair_message(spec.name,
                                         revalidation_error,
+                                        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
                                     )
                                     if isinstance(trajectory.metadata, MutableMapping):
                                         trajectory.metadata["arg_repair_message"] = repair_msg
@@ -2142,6 +2153,7 @@ async def run_loop(
                             repair_msg = prompts.render_arg_repair_message(
                                 spec.name,
                                 _serialize_validation_errors(merge_exc),
+                                tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
                             )
                             if isinstance(trajectory.metadata, MutableMapping):
                                 trajectory.metadata["arg_repair_message"] = repair_msg
@@ -2191,10 +2203,10 @@ async def run_loop(
                         )
                     else:
                         # Regular arg validation failure
-                        repair_msg = prompts.render_arg_repair_message(
-                            spec.name,
+                        repair_msg = prompts.render_arg_repair_message(spec.name,
                             arg_validation_error,
-                        )
+                                        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
+                                    )
 
                     if isinstance(trajectory.metadata, MutableMapping):
                         trajectory.metadata["arg_repair_message"] = repair_msg

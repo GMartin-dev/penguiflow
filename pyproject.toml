@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penguiflow"
-version = "3.10.1"
+version = "3.11.0"
 description = "Async-first orchestration library for multi-agent and data pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -50,6 +50,9 @@ dev = [
     "anthropic>=0.75.0",
     "google-genai>=1.57.0",
     "boto3>=1.42.0",
+    # pydantic-ai transport tests
+    "pydantic-ai-slim[openai,openrouter]>=1.107.0,<2",
+    "genai-prices>=0.0.66,<1",
 ]
 docs = [
     "mkdocs>=1.6",
@@ -103,6 +106,11 @@ llm = [
 ]
 tools-cli = ["utcp-cli>=1.0.0"]
 tools-websocket = ["utcp-websocket>=1.0.0"]
+pricing = ["genai-prices>=0.0.66,<1"]
+pydantic-ai = [
+    "pydantic-ai-slim[openai,openrouter]>=1.107.0,<2",
+    "genai-prices>=0.0.66,<1",
+]
 
 [project.scripts]
 penguiflow-admin = "penguiflow.admin:main"
@@ -175,6 +183,9 @@ dev = [
     "anthropic>=0.75.0",
     "google-genai>=1.57.0",
     "boto3>=1.42.0",
+    # pydantic-ai transport tests
+    "pydantic-ai-slim[openai,openrouter]>=1.107.0,<2",
+    "genai-prices>=0.0.66,<1",
 ]
 
 [tool.ruff]
@@ -204,6 +215,15 @@ disallow_untyped_defs = false
 ignore_missing_imports = true
 warn_unused_ignores = true
 show_error_codes = true
+
+# numpy is a transitive-only dependency. Newer numpy releases ship .pyi stubs
+# that use PEP 695 `type` statements, which mypy rejects under our 3.11 target
+# (`requires-python >= 3.11`). We never import numpy directly, so skip following
+# imports into it rather than dropping 3.11 type-checking of our own code.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.pytest.ini_options]
 addopts = "-q"

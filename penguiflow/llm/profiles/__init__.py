@@ -27,8 +27,16 @@ class ModelProfile:
     supports_schema_guided_output: bool = False  # Provider-native schema-guided structured output
     supports_json_only_output: bool = True  # Provider-native "JSON only" mode (if supported)
     supports_tools: bool = True  # Tool/function calling
+    # Whether provider-native function calling works on this model's ROUTE
+    # (distinct from supports_tools: the model may support tools while the
+    # serving endpoint rejects native function calling, e.g. Databricks
+    # gpt-5.5 requires the Responses API). Gates the planner's native
+    # tool-calling mode; ineligible models downgrade to prompted mode.
+    supports_native_tool_calls: bool = True
     supports_reasoning: bool = False  # Native reasoning (o1, o3, deepseek-r1)
     supports_streaming: bool = True  # Streaming responses
+    supports_image_input: bool = False  # Image content parts in user messages
+    supports_audio_input: bool = False  # Audio content parts in user messages
     # Whether the model accepts an explicit `temperature` value. False for
     # models that reject the parameter (e.g. Databricks GPT-5 reasoning models
     # accept only the default; databricks-claude-opus-4-7 rejects it outright).
@@ -61,6 +69,13 @@ class ModelProfile:
     # - "reasoning_effort": pass the reasoning_effort parameter through as-is
     # None: the provider falls back to model-name heuristics.
     reasoning_request_style: Literal["adaptive_effort", "thinking_budget", "reasoning_effort"] | None = None
+
+    # Transport pinning. None = follow the adapter-level `transport` selection;
+    # set to pin this model to a transport regardless of the default (an
+    # explicit `transport=` kwarg still wins). E.g. Databricks Claude
+    # reasoning models pin "native" while the generic transport cannot parse
+    # their reasoning content blocks.
+    preferred_transport: Literal["native", "pydantic-ai"] | None = None
 
     # Provider quirks
     strict_mode_default: bool = True  # Default for strict JSON schema

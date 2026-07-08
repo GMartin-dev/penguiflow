@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..artifacts import ArtifactScope, ArtifactStore
 from ..catalog import NodeSpec, build_catalog
+from ..llm.types import ContentPart
 from ..node import Node
 from ..registry import ModelRegistry
 from . import prompts
@@ -165,6 +166,9 @@ from .validation_repair import (
 )
 from .validation_repair import (
     _attempt_graceful_failure as _attempt_graceful_failure_impl,
+)
+from .validation_repair import (
+    _ensure_structured_final as _ensure_structured_final_impl,
 )
 from .validation_repair import (
     _extract_field_descriptions as _extract_field_descriptions_impl,
@@ -373,6 +377,11 @@ class ReactPlanner:
     _specs: list[NodeSpec]
     _state_store: Any | None
     _stream_final_response: bool
+    _final_response_model: type[BaseModel] | None
+    _final_response_retries: int
+    _final_response_schema: dict[str, Any] | None
+    _tool_call_mode: str
+    _llm_transport: str | None
     _summarizer_client: JSONLLMClient | None
     _system_prompt: str
     _system_prompt_extra: str | None
@@ -450,6 +459,10 @@ class ReactPlanner:
         reflection_llm: str | Mapping[str, Any] | None = None,
         tool_policy: ToolPolicy | None = None,
         stream_final_response: bool = False,
+        final_response_model: type[BaseModel] | None = None,
+        final_response_retries: int = 1,
+        tool_call_mode: str = "prompted",
+        llm_transport: str | None = None,
         short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
         background_tasks: BackgroundTasksConfig | None = None,
         error_recovery: ErrorRecoveryConfig | None = None,
@@ -515,6 +528,10 @@ class ReactPlanner:
             "reflection_llm": reflection_llm,
             "tool_policy": tool_policy,
             "stream_final_response": stream_final_response,
+            "final_response_model": final_response_model,
+            "final_response_retries": final_response_retries,
+            "tool_call_mode": tool_call_mode,
+            "llm_transport": llm_transport,
             "short_term_memory": short_term_memory,
             "background_tasks": background_tasks,
             "error_recovery": error_recovery,
@@ -569,6 +586,10 @@ class ReactPlanner:
             reflection_llm=reflection_llm,
             tool_policy=tool_policy,
             stream_final_response=stream_final_response,
+            final_response_model=final_response_model,
+            final_response_retries=final_response_retries,
+            tool_call_mode=tool_call_mode,
+            llm_transport=llm_transport,
             short_term_memory=short_term_memory,
             background_tasks=background_tasks,
             error_recovery=error_recovery,
@@ -692,6 +713,7 @@ class ReactPlanner:
         self,
         query: str,
         *,
+        input_parts: Sequence[ContentPart] | None = None,
         llm_context: Mapping[str, Any] | None = None,
         context_meta: Mapping[str, Any] | None = None,  # Deprecated
         tool_context: Mapping[str, Any] | None = None,
@@ -708,6 +730,9 @@ class ReactPlanner:
         llm_context : Mapping[str, Any] | None
             Optional context visible to LLM (memories, status_history, etc.).
             Should NOT include internal metadata like tenant_id or trace_id.
+        input_parts : Sequence[ContentPart] | None
+            Optional image/audio content parts appended to the initial user
+            message. Omitted by default to preserve text-only behavior.
         context_meta : Mapping[str, Any] | None
             **Deprecated**: Use llm_context instead. This parameter is kept for
             backward compatibility but will be removed in a future version.
@@ -743,6 +768,7 @@ class ReactPlanner:
                 async with session_lock:
                     return await session_planner.run(
                         query,
+                        input_parts=input_parts,
                         llm_context=llm_context,
                         context_meta=context_meta,
                         tool_context=tool_context,
@@ -761,6 +787,7 @@ class ReactPlanner:
                 return await _run_impl(
                     self,
                     query,
+                    input_parts=input_parts,
                     llm_context=llm_context,
                     context_meta=context_meta,
                     tool_context=tool_context,
@@ -989,10 +1016,10 @@ class ReactPlanner:
     def _make_context(self, trajectory: Trajectory) -> _PlannerContext:
         return _PlannerContext(self, trajectory)
 
-    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, str]]:
+    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, Any]]:
         return await build_messages(self, trajectory)
 
-    def _estimate_size(self, messages: Sequence[Mapping[str, str]]) -> int:
+    def _estimate_size(self, messages: Sequence[Mapping[str, Any]]) -> int:
         return _estimate_size(messages)
 
     async def _summarise_trajectory(self, trajectory: Trajectory) -> TrajectorySummary:
@@ -1574,6 +1601,29 @@ class ReactPlanner:
             emit_event=self._emit_event,
             time_source=self._time_source,
             system_prompt_extra=self._system_prompt_extra,
+            action_seq=action_seq,
+        )
+
+    async def _ensure_structured_final(
+        self,
+        trajectory: Trajectory,
+        action: PlannerAction,
+        *,
+        action_seq: int,
+    ) -> None:
+        if self._final_response_model is None:
+            return
+        await _ensure_structured_final_impl(
+            trajectory=trajectory,
+            action=action,
+            final_response_model=self._final_response_model,
+            final_response_schema=self._final_response_schema or {},
+            retries=self._final_response_retries,
+            build_messages=self._build_messages,
+            client=self._client,
+            cost_tracker=self._cost_tracker,
+            emit_event=self._emit_event,
+            time_source=self._time_source,
             action_seq=action_seq,
         )
 
