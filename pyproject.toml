@@ -216,6 +216,15 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 show_error_codes = true
 
+# numpy is a transitive-only dependency. Newer numpy releases ship .pyi stubs
+# that use PEP 695 `type` statements, which mypy rejects under our 3.11 target
+# (`requires-python >= 3.11`). We never import numpy directly, so skip following
+# imports into it rather than dropping 3.11 type-checking of our own code.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
