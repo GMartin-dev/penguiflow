@@ -69,7 +69,32 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ToolNode:
-    """Unified external tool integration for Penguiflow (MCP only for Phase 1)."""
+    """Unified external tool integration for Penguiflow (MCP only for Phase 1).
+
+    ToolNode connects to a single external tool source (an MCP server, or a
+    UTCP/HTTP/CLI endpoint) and converts whatever tools/resources/prompts it
+    exposes into Penguiflow ``NodeSpec`` objects that the planner and registry
+    can consume. Callers typically construct one ``ToolNode`` per configured
+    source, ``await connect()`` it, register ``get_tools()`` with the planner,
+    invoke tools through ``call()``, and ``await close()`` it during shutdown.
+
+    Attributes:
+        config: Static configuration for the tool source (transport, auth,
+            retry policy, artifact-extraction rules, etc.). See
+            :class:`~penguiflow.tools.config.ExternalToolConfig`.
+        registry: The shared :class:`~penguiflow.registry.ModelRegistry` that
+            discovered tool argument/result models are registered into.
+        auth_manager: Optional OAuth manager used to resolve and refresh user
+            tokens for ``AuthType.OAUTH2_USER`` sources (e.g. an
+            :class:`~penguiflow.tools.auth.OAuthManager`). Required whenever
+            ``config.auth_type`` is ``OAUTH2_USER``; otherwise unused.
+
+    Example:
+        >>> node = ToolNode(config=cfg, registry=registry)
+        >>> await node.connect()
+        >>> specs = node.get_tools()
+        >>> await node.close()
+    """
 
     config: ExternalToolConfig
     registry: ModelRegistry
@@ -109,9 +134,24 @@ class ToolNode:
     async def connect(self, ctx: ToolContext | None = None) -> None:
         """Connect to tool source and discover available tools.
 
+        Idempotent: if already connected on the current event loop this is a
+        no-op. If the connection was established on a different event loop
+        (e.g. the ToolNode was built before an async server started), this
+        transparently reconnects on the current loop. On success, discovered
+        tools (and, for MCP transports, resources and prompts) are populated
+        and registered into ``self.registry``.
+
         Args:
             ctx: Optional ToolContext for HITL OAuth during connection.
                  Required if auth_type is OAUTH2_USER.
+
+        Raises:
+            ToolAuthError: If ``auth_type`` is ``OAUTH2_USER`` and ``ctx`` is
+                not provided, or the OAuth flow does not yield a token.
+            ToolConnectionError: If the transport is unsupported or the
+                underlying MCP/UTCP client fails to connect.
+            ToolNodeError: If a discovered tool name collides with an
+                already-registered name in ``self.registry``.
         """
         current_loop = asyncio.get_running_loop()
 
@@ -547,11 +587,20 @@ class ToolNode:
         """Return discovered tools as Penguiflow NodeSpec entries.
 
         Note: connect() must be called before this method.
+
+        Returns:
+            The list of :class:`~penguiflow.catalog.NodeSpec` discovered
+            during ``connect()`` (including any generated resource/prompt
+            tools). Empty if ``connect()`` has not been called yet.
         """
         return self._tools
 
     def get_tool_specs(self) -> list[NodeSpec]:
-        """Alias for get_tools for compatibility with generators."""
+        """Alias for get_tools for compatibility with generators.
+
+        Returns:
+            Same value as :meth:`get_tools`.
+        """
         return self.get_tools()
 
     async def call(
@@ -560,7 +609,33 @@ class ToolNode:
         args: dict[str, Any],
         ctx: ToolContext,
     ) -> Any:
-        """Execute a tool with auth resolution and resilience."""
+        """Execute a tool with auth resolution and resilience.
+
+        Reconnects automatically if the client is not connected or was
+        connected on a different event loop, resolves auth headers (pausing
+        for HITL OAuth via ``ctx`` if needed), invokes the underlying
+        MCP/UTCP tool with retries per ``config.retry_policy``, and runs the
+        result through the layered artifact-extraction pipeline (and, for
+        MCP Apps-enabled tools, fetches and attaches the app UI resource).
+
+        Args:
+            tool_name: Namespaced tool name (e.g. ``"{source}.{tool}"``) or
+                the bare original tool name; both are accepted.
+            args: Tool call arguments as a plain dict (already validated
+                against the tool's args model by the caller/planner).
+            ctx: ToolContext for the current run, used to resolve auth,
+                pause for HITL flows, and access the artifact store.
+
+        Returns:
+            A dict of the form ``{"result": <transformed_output>}`` where
+            ``<transformed_output>`` has had binary/oversized content
+            replaced by artifact references.
+
+        Raises:
+            ToolAuthError: If OAuth is required but cannot be resolved.
+            ToolNodeError: If no client is available or the call fails after
+                exhausting retries.
+        """
         current_loop = asyncio.get_running_loop()
         if not self._connected or (self._connected_loop and self._connected_loop is not current_loop):
             await self._force_reconnect()
@@ -606,7 +681,13 @@ class ToolNode:
             return {"result": transformed}
 
     async def close(self) -> None:
-        """Clean up resources."""
+        """Clean up resources.
+
+        Marks the node disconnected, clears discovered tool state, and best
+        -effort closes the underlying MCP/UTCP client (exceptions during
+        client teardown, e.g. from a stale event loop, are swallowed). Safe
+        to call multiple times.
+        """
         self._connected = False
         self._connected_loop = None
         self._tools = []
@@ -2127,7 +2208,12 @@ class ToolNode:
                 pass
 
     def set_resource_updated_callback(self, callback: Callable[[str], None] | None) -> None:
-        """Register a callback invoked when MCP resources are updated."""
+        """Register a callback invoked when MCP resources are updated.
+
+        Args:
+            callback: Callable invoked with the updated resource URI, or
+                ``None`` to clear a previously registered callback.
+        """
         self._resource_update_callback = callback
 
     @property
