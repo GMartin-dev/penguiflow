@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.11.0 — 2026-07-08
 
 ### Added
 - **Uniform built-in LLM fallback**: rate-limit (`429`) fallback is now applied at
@@ -159,6 +159,111 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   only PenguiFlow-owned blocks.
 - `penguiflow generate --init` now emits updated assistant instructions that direct ongoing changes through
   `penguiflow apply`.
+
+## 3.10.0 — 2026-06-11
+
+### Added
+- **Opt-in temperature handling and rate-limit model fallback**: `ModelFallbackConfig`
+  + `FallbackLLMClient` and a new `ReactPlanner(llm_fallback=...)` option. On a 429 —
+  even mid-run — the call fails over to the next configured model (rotating API keys
+  within a model first) and places the rate-limited `(model, key)` pair in a cooldown.
+- Model profiles for **GPT-5.5, Gemini 3.5 Flash, and Claude Opus 4.7**, plus the
+  fallback-adapter factory (Option A) and the LLM-provider robustness branch plan.
+
+### Changed
+- AG-UI session snapshots now sanitize non-serializable `llm_context` / `tool_context`
+  via a JSON snapshot before persisting to session state, so runtime objects no longer
+  break serialization (live tool context still keeps live objects).
+
+### Fixed
+- Databricks **Claude Opus 4.7 reasoning mapping** corrected (shipped through the
+  3.10.0a3 prerelease).
+
+## 3.9.0 — 2026-05-19
+
+### Added
+- **Tag/namespace filters for `tool_search` and `skill_search`**: typed filter args on
+  `ToolSearchArgs`, `SkillSearchQuery`, `SkillQuery`, and `SkillListRequest`, backed by
+  the FTS5-indexed `tags` columns. Tags are AND-matched against declared-only tag lists
+  (a new `declared_tags` column prevents FTS name-token expansion from polluting filter
+  results); namespaces use dot-prefix match, consistent with existing
+  `match_namespaces` semantics. All filters compose.
+
+## 3.8.1 — 2026-05-14
+
+### Fixed
+- Prerelease test failures resolved.
+
+### Docs
+- MkDocs site enhancements.
+
+## 3.8.0 — 2026-05-13
+
+### Added
+- **Safe spec apply workflow** (`penguiflow apply`): Ansible-style reconciliation of spec
+  changes into existing projects without overwriting implemented tool files, with new
+  `docs/cli/apply-command.md` and updated generate/new command docs.
+
+### Changed
+- **Databricks provider token-refresh hardening** for singleton deployments.
+- Skills drift reconciliation.
+
+### Fixed
+- Provider initialization issue (`llm/providers`).
+
+## 3.7.0 — 2026-05-12
+
+### Added
+- **Skills generation**: first-class skills authoring/generation, shipped `skills/`
+  bundles (e.g. `penguiflow-a2a-integration`) with SKILL.md + references.
+- **A2A full spec** implementation and the **A2A remote task progress sink**.
+
+### Fixed
+- MCP Apps renderer fix.
+
+## 3.6.3 — 2026-04-03
+
+### Fixed
+- Validation error in the planner/react runtime and web specs paths.
+
+## 3.6.2 — 2026-03-25
+
+### Security
+- **Pinned `litellm<=1.82.6`** to avoid known-compromised releases.
+
+### Changed
+- CI configuration updates for ruff, mypy, and the docs pipeline; prompting fix.
+
+## 3.6.1 — 2026-03-23
+
+### Added
+- **Rich-output enhanced wrappers** and substantial docs
+  (`docs/planner/rich-output*.md`, `rich-output-skills.md`, `rich-output-extensions.md`),
+  with `artifact_registry` refinements.
+
+## 3.6.0 — 2026-03-19
+
+### Added
+- **New output renderers** to reduce post-processing fixes on agent outputs.
+- Updated model **profiles and pricing**.
+- **Complete router-only A2A discovery**.
+
+## 3.5.0 — 2026-03-17
+
+### Added
+- **Extended A2A functionality** (broad surface update across docs, templates, and
+  pricing).
+- **Deferred tools activatable via parallel tool calling** (`planner/parallel.py`).
+- **Runtime skill providers and draft-only skill proposals**
+  (`skills/provider.py`, `skills/local_store.py`).
+
+## 3.4.0 — 2026-03-13
+
+### Added
+- **Skills v2**: skill-provider enhancements.
+
+### Fixed
+- MCP app reconnect and resource proxying.
 
 ## 2.12.1
 
