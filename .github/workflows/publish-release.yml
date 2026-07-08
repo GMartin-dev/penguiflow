@@ -8,10 +8,12 @@ name: Publish Release
 on:
   push:
     tags:
-      # Final semver tags only (e.g. v3.11.0). Prerelease tags such as
-      # v3.11.0a8 / v3.11.0rc1 do not match this pattern and are handled by
-      # publish-prerelease.yml.
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      # GitHub Actions tag filters are glob patterns, not regex, so we do NOT
+      # try to express "final semver only" here. This coarse glob nets every
+      # version-like tag (finals AND prereleases such as v3.11.0a8 / v3.11.0rc1);
+      # the `gate` step below is the precise, reliable filter that skips
+      # prereleases and validates the tag against pyproject's version.
+      - "v[0-9]*"
 
 permissions:
   contents: write
@@ -26,7 +28,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify final release tag matches package version
+      - name: Gate — final release tag matching package version
+        id: gate
         run: |
           python - <<'PY'
           import os
@@ -34,11 +37,21 @@ jobs:
           import tomllib
 
           tag = os.environ["GITHUB_REF_NAME"]
-          if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-              raise SystemExit(
-                  f"Tag {tag!r} is not a final release tag (expected vX.Y.Z)"
-              )
+          out = os.environ["GITHUB_OUTPUT"]
 
+          def emit(key: str, value: str) -> None:
+              with open(out, "a", encoding="utf-8") as handle:
+                  handle.write(f"{key}={value}\n")
+
+          # Prereleases (v3.11.0a8, v3.11.0rc1, ...) are handled by
+          # publish-prerelease.yml. Skip cleanly (green no-op) rather than fail.
+          if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+              print(f"Tag {tag!r} is not a final release tag; skipping.")
+              emit("final", "false")
+              raise SystemExit(0)
+
+          # A final tag that disagrees with the packaged version is a real
+          # release mistake — fail loudly.
           expected = tag.removeprefix("v")
           with open("pyproject.toml", "rb") as handle:
               actual = tomllib.load(handle)["project"]["version"]
@@ -46,9 +59,12 @@ jobs:
               raise SystemExit(
                   f"pyproject version {actual!r} does not match tag {tag!r}"
               )
+
+          emit("final", "true")
           PY
 
       - name: Extract changelog section for this version
+        if: steps.gate.outputs.final == 'true'
         id: notes
         run: |
           python - <<'PY'
@@ -88,6 +104,7 @@ jobs:
           PY
 
       - name: Create or update GitHub Release
+        if: steps.gate.outputs.final == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
