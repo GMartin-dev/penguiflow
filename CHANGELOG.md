@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.11.1 — 2026-07-09
+
+Documentation-only release. No runtime or public API behavior changes.
+
+### Added
+- **API reference**: we generated a complete per-symbol reference for the public
+  API, published under the docs site's "Reference → API reference" section. Pages
+  are scoped to each package's `__all__` (`penguiflow`, `penguiflow.planner`,
+  `penguiflow.llm`, `penguiflow.tools`), so internal runtime modules are
+  intentionally omitted.
+
+### Changed
+- **Docstring coverage substantially expanded across the public surface** so the
+  API reference renders useful Args/Returns/Raises tables. `ReactPlanner` (class
+  plus `run`/`resume`/`fork`) was reformatted to Google style; planner public
+  models (`models.py`, `trajectory.py`) gained class docstrings and field
+  descriptions; and the core runtime (`core.py`, `types.py`, `node.py`,
+  `patterns.py`, errors/metrics/policies/streaming), sessions, skills, state,
+  tools, remote, and steering modules were backfilled with Google-style
+  docstrings. Docstrings and Pydantic field descriptions only — no logic changes.
+- **Root README refreshed**: sharper positioning line, a problem-first "Why
+  PenguiFlow" section, an architecture diagram, and a link to the new API
+  reference; the stale "2.x line" statement is corrected to the current
+  3.x / SemVer wording.
+
 ## 3.11.0 — 2026-07-08
 
 ### Fixed
