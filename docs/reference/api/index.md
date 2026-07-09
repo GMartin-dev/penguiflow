@@ -1,6 +1,6 @@
 # API Reference
 
-This is the auto-generated reference for PenguiFlow's public API. Every symbol
+This is the complete reference for PenguiFlow's public API. Every symbol
 documented here is re-exported from `penguiflow` (or one of its public
 sub-packages `penguiflow.planner`, `penguiflow.llm`, `penguiflow.tools`) and is
 covered by the library's backward-compatibility guarantees.
