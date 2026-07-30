@@ -237,6 +237,9 @@ PROFILES: dict[str, ModelProfile] = {
         max_context_tokens=200000,
         max_output_tokens=64000,
     ),
+    "databricks-claude-sonnet-5": ModelProfile(
+        supports_temperature=False,  # Databricks route rejects the temperature param
+    ),
     "databricks-claude-opus-4-5": ModelProfile(
         supports_schema_guided_output=True,
         supports_json_only_output=False,  # Only schema-guided, not json_object

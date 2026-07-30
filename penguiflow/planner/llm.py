@@ -14,6 +14,7 @@ from typing import Any, get_args, get_origin
 from pydantic import BaseModel
 
 from ..llm.errors import LLMRateLimitError
+from ..llm.profiles import get_profile
 from ..llm.types import TextPart
 from . import prompts
 from .models import (
@@ -598,15 +599,25 @@ class _LiteLLMJSONClient:
             params = {"model": self._llm}
         else:
             params = dict(self._llm)
-        params.setdefault("temperature", self._temperature)
+        model_name = self._llm if isinstance(self._llm, str) else self._llm.get("model", "")
+        profile = get_profile(model_name)
+        if profile.supports_temperature:
+            params.setdefault("temperature", self._temperature)
         params["messages"] = list(messages)
 
         # Only pass reasoning_effort if the model actually supports native reasoning.
         # Some providers (e.g., Databricks) crash during parameter mapping if
         # reasoning_effort is passed to non-reasoning models, even with drop_params=True.
-        model_name = self._llm if isinstance(self._llm, str) else self._llm.get("model", "")
-        if self._use_native_reasoning and self._reasoning_effort is not None and _supports_reasoning(model_name):
-            params["reasoning_effort"] = self._reasoning_effort
+        if (
+            self._use_native_reasoning
+            and self._reasoning_effort is not None
+            and (_supports_reasoning(model_name) or profile.reasoning_request_style == "adaptive_effort")
+        ):
+            if profile.reasoning_request_style == "adaptive_effort":
+                params["thinking"] = {"type": "adaptive"}
+                params["output_config"] = {"effort": self._reasoning_effort}
+            else:
+                params["reasoning_effort"] = self._reasoning_effort
             # Providers vary in support; drop unsupported params instead of failing.
             params.setdefault("drop_params", True)
         if self._json_schema_mode and response_format is not None:
