@@ -557,6 +557,7 @@ class _LiteLLMJSONClient:
         streaming_enabled: bool = False,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        reasoning_display: str | None = None,
         retry_rate_limit_errors: bool = True,
     ) -> None:
         import warnings
@@ -576,6 +577,7 @@ class _LiteLLMJSONClient:
         self._streaming_enabled = streaming_enabled
         self._use_native_reasoning = use_native_reasoning
         self._reasoning_effort = reasoning_effort
+        self._reasoning_display = reasoning_display
         self._retry_rate_limit_errors = retry_rate_limit_errors
 
     async def complete(
@@ -615,6 +617,8 @@ class _LiteLLMJSONClient:
         ):
             if profile.reasoning_request_style == "adaptive_effort":
                 params["thinking"] = {"type": "adaptive"}
+                if self._reasoning_display in {"summarized", "omitted"}:
+                    params["thinking"]["display"] = self._reasoning_display
                 params["output_config"] = {"effort": self._reasoning_effort}
             else:
                 params["reasoning_effort"] = self._reasoning_effort

@@ -65,6 +65,7 @@ def _build_litellm_client(
     streaming_enabled: bool = False,
     use_native_reasoning: bool = True,
     reasoning_effort: str | None = None,
+    reasoning_display: str | None = None,
     llm_fallback: ModelFallbackConfig | None = None,
     cooldown_store: CooldownStore | None = None,
 ) -> JSONLLMClient:
@@ -87,6 +88,7 @@ def _build_litellm_client(
             streaming_enabled=streaming_enabled,
             use_native_reasoning=use_native_reasoning,
             reasoning_effort=reasoning_effort,
+            reasoning_display=reasoning_display,
         )
 
     if isinstance(llm, Mapping):
@@ -118,6 +120,7 @@ def _build_litellm_client(
         streaming_enabled=streaming_enabled,
         use_native_reasoning=use_native_reasoning,
         reasoning_effort=reasoning_effort,
+        reasoning_display=reasoning_display,
         retry_rate_limit_errors=False,
     )
 
@@ -152,6 +155,7 @@ def init_react_planner(
     llm_max_retries: int = 3,
     use_native_reasoning: bool = True,
     reasoning_effort: str | None = None,
+    reasoning_display: str | None = None,
     llm_fallback: ModelFallbackConfig | None = None,
     absolute_max_parallel: int = 50,
     reflection_config: ReflectionConfig | None = None,
@@ -212,6 +216,7 @@ def init_react_planner(
         llm_max_retries: Maximum LLM retry attempts.
         use_native_reasoning: Enable native reasoning for supported models.
         reasoning_effort: Reasoning effort level (e.g., "low", "medium", "high").
+        reasoning_display: Reasoning display mode ("summarized" or "omitted").
         llm_fallback: Optional ModelFallbackConfig enabling rate-limit fallback
             across an ordered chain of models (native LLM layer only).
         absolute_max_parallel: Maximum parallel tool executions.
@@ -563,6 +568,7 @@ def init_react_planner(
     planner._absolute_max_parallel = absolute_max_parallel
     planner._use_native_reasoning = use_native_reasoning
     planner._reasoning_effort = reasoning_effort
+    planner._reasoning_display = reasoning_display
     if skills_config.enabled:
         local_provider: LocalSkillProvider | None = None
         if skills_config.skill_packs:
@@ -748,6 +754,7 @@ def init_react_planner(
                 streaming_enabled=stream_final_response,
                 use_native_reasoning=use_native_reasoning,
                 reasoning_effort=reasoning_effort,
+                reasoning_display=reasoning_display,
                 fallback=llm_fallback,
                 cooldown_store=fallback_store,
             )
@@ -761,6 +768,7 @@ def init_react_planner(
                 streaming_enabled=stream_final_response,
                 use_native_reasoning=use_native_reasoning,
                 reasoning_effort=reasoning_effort,
+                reasoning_display=reasoning_display,
                 llm_fallback=llm_fallback,
                 cooldown_store=fallback_store,
             )

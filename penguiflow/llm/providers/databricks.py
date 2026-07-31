@@ -575,6 +575,7 @@ class DatabricksProvider(OpenAICompatibleProvider):
             extra = dict(request.extra)
 
             reasoning_effort = extra.pop("reasoning_effort", None)
+            reasoning_display = extra.pop("reasoning_display", None)
             if isinstance(reasoning_effort, str) and reasoning_effort:
                 style = self._resolve_reasoning_request_style()
 
@@ -586,6 +587,8 @@ class DatabricksProvider(OpenAICompatibleProvider):
                     else:
                         if "thinking" not in extra and "thinking" not in params:
                             params["thinking"] = {"type": "adaptive"}
+                            if reasoning_display in ("summarized", "omitted"):
+                                params["thinking"]["display"] = reasoning_display
                         output_config = params.get("output_config")
                         if not isinstance(output_config, dict):
                             output_config = {}
@@ -607,6 +610,8 @@ class DatabricksProvider(OpenAICompatibleProvider):
                 elif style == "reasoning_effort":
                     params["reasoning_effort"] = reasoning_effort
 
+            for param in self._profile.unsupported_request_params:
+                extra.pop(param, None)
             params.update(extra)
 
         self._ensure_thinking_budget_and_max_tokens(
