@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.118",
     "uvicorn>=0.32",
     "databricks-mcp>=0.6.0",
+    "mcp>=1.26,<2",
 ]
 
 [project.optional-dependencies]
