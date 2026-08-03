@@ -603,6 +603,11 @@ class _LiteLLMJSONClient:
             params = dict(self._llm)
         model_name = self._llm if isinstance(self._llm, str) else self._llm.get("model", "")
         profile = get_profile(model_name)
+        if not isinstance(self._llm, str):
+            for param in profile.unsupported_request_params:
+                params.pop(param, None)
+            if not profile.supports_temperature:
+                params.pop("temperature", None)
         if profile.supports_temperature:
             params.setdefault("temperature", self._temperature)
         params["messages"] = list(messages)
@@ -616,10 +621,17 @@ class _LiteLLMJSONClient:
             and (_supports_reasoning(model_name) or profile.reasoning_request_style == "adaptive_effort")
         ):
             if profile.reasoning_request_style == "adaptive_effort":
-                params["thinking"] = {"type": "adaptive"}
-                if self._reasoning_display in {"summarized", "omitted"}:
-                    params["thinking"]["display"] = self._reasoning_display
-                params["output_config"] = {"effort": self._reasoning_effort}
+                effort = str(self._reasoning_effort).strip().lower()
+                if effort in ("none", "off", "disabled", "false", "0"):
+                    params["thinking"] = {"type": "disabled"}
+                else:
+                    params["thinking"] = {"type": "adaptive"}
+                    display = self._reasoning_display
+                    if display not in {"summarized", "omitted"}:
+                        display = profile.reasoning_display_default
+                    if display is not None:
+                        params["thinking"]["display"] = display
+                    params["output_config"] = {"effort": effort}
             else:
                 params["reasoning_effort"] = self._reasoning_effort
             # Providers vary in support; drop unsupported params instead of failing.

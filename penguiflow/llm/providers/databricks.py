@@ -580,12 +580,12 @@ class DatabricksProvider(OpenAICompatibleProvider):
                 style = self._resolve_reasoning_request_style()
 
                 # Adaptive thinking + output_config.effort (Claude Opus 4.7/4.8).
-                if style == "adaptive_effort":
+                if style == "adaptive_effort" and "thinking" not in extra:
                     effort = reasoning_effort.strip().lower()
                     if effort in ("none", "off", "disabled", "false", "0"):
                         params["thinking"] = {"type": "disabled"}
                     else:
-                        if "thinking" not in extra and "thinking" not in params:
+                        if "thinking" not in params:
                             params["thinking"] = {"type": "adaptive"}
                             if reasoning_display in ("summarized", "omitted"):
                                 params["thinking"]["display"] = reasoning_display

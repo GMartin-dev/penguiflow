@@ -641,6 +641,32 @@ class TestDatabricksProviderBuildParams:
         assert params["thinking"] == {"type": "disabled"}
         assert "output_config" not in params
 
+    def test_build_params_registered_sonnet_5_preserves_explicit_disabled_thinking(self) -> None:
+        """Explicit disabled thinking overrides Sonnet 5 reasoning options."""
+        from penguiflow.llm.profiles import get_profile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-5"
+        provider._profile = get_profile(provider._model)
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={
+                "thinking": {"type": "disabled"},
+                "reasoning_effort": "high",
+                "reasoning_display": "summarized",
+            },
+        )
+
+        params = provider._build_params(request)
+
+        assert params["thinking"] == {"type": "disabled"}
+        assert "output_config" not in params
+        assert "reasoning_effort" not in params
+        assert "reasoning_display" not in params
+
     def test_build_params_profile_style_overrides_model_heuristics(self) -> None:
         """ModelProfile.reasoning_request_style wins over model-name heuristics."""
         from penguiflow.llm.profiles import ModelProfile

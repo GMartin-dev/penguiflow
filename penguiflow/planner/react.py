@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..artifacts import ArtifactScope, ArtifactStore
 from ..catalog import NodeSpec, build_catalog
-from ..llm.types import ContentPart
+from ..llm.types import ContentPart, ReasoningDisplay
 from ..node import Node
 from ..registry import ModelRegistry
 from . import prompts
@@ -419,7 +419,7 @@ class ReactPlanner:
         llm_max_retries: int = 3,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
-        reasoning_display: str | None = None,
+        reasoning_display: ReasoningDisplay = None,
         llm_fallback: ModelFallbackConfig | None = None,
         absolute_max_parallel: int = 50,
         reflection_config: ReflectionConfig | None = None,

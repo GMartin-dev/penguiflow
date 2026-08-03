@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 Role = Literal["system", "user", "assistant", "tool"]
+ReasoningDisplay = Literal[None, "summarized", "omitted"]
+
+
+def validate_reasoning_display(reasoning_display: object) -> ReasoningDisplay:
+    """Reject unsupported modes before providers interpret them differently."""
+    if reasoning_display not in (None, "summarized", "omitted"):
+        raise ValueError(
+            "reasoning_display must be one of None, 'summarized', or 'omitted'"
+        )
+    return reasoning_display  # type: ignore[return-value]
 
 
 @dataclass(frozen=True, slots=True)

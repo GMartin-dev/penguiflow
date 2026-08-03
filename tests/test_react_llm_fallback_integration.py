@@ -68,6 +68,11 @@ def test_planner_passes_reasoning_display_to_litellm_client(monkeypatch: pytest.
     assert planner._client._reasoning_display == "summarized"
 
 
+def test_planner_rejects_full_reasoning_display() -> None:
+    with pytest.raises(ValueError, match="reasoning_display"):
+        ReactPlanner(llm="primary", catalog=[], reasoning_display="full")
+
+
 def test_dspy_client_construction_is_deprecated() -> None:
     with pytest.warns(DeprecationWarning, match="DSPyLLMClient is deprecated"):
         DSPyLLMClient(llm="primary")
