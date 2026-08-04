@@ -312,7 +312,7 @@ class ToolNode:
             else None
         )
         roots = (
-            mcp_types.RootsCapability(listChanged=True)
+            mcp_types.RootsCapability.model_validate({"listChanged": True})
             if getattr(session, "_list_roots_callback", None) is not _default_list_roots_callback
             else None
         )
@@ -335,13 +335,15 @@ class ToolNode:
         client_info = cast(mcp_types.Implementation, getattr(session, "_client_info", None))
 
         request = mcp_types.ClientRequest(
-            mcp_types.InitializeRequest(
-                params=mcp_types.InitializeRequestParams(
-                    protocolVersion=mcp_types.LATEST_PROTOCOL_VERSION,
-                    capabilities=capabilities,
-                    clientInfo=client_info,
+            root=mcp_types.InitializeRequest(
+                params=mcp_types.InitializeRequestParams.model_validate(
+                    {
+                        "protocolVersion": mcp_types.LATEST_PROTOCOL_VERSION,
+                        "capabilities": capabilities,
+                        "clientInfo": client_info,
+                    }
                 ),
-            )
+            ),
         )
 
         timeout = getattr(client, "_init_timeout", None)
@@ -372,7 +374,7 @@ class ToolNode:
             session._server_capabilities = result.capabilities
 
         await session.send_notification(
-            mcp_types.ClientNotification(mcp_types.InitializedNotification())
+            mcp_types.ClientNotification(root=mcp_types.InitializedNotification())
         )
         return result
 

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..artifacts import ArtifactScope, ArtifactStore
 from ..catalog import NodeSpec, build_catalog
-from ..llm.types import ContentPart
+from ..llm.types import ContentPart, ReasoningDisplay
 from ..node import Node
 from ..registry import ModelRegistry
 from . import prompts
@@ -376,6 +376,7 @@ class ReactPlanner:
     _auto_seq_read_only_only: bool
     _use_native_reasoning: bool
     _reasoning_effort: str | None
+    _reasoning_display: str | None
     _guardrail_gateway: GuardrailGateway | None
     _guardrail_context: GuardrailContext | None
     _guardrail_run_id: str | None
@@ -418,6 +419,7 @@ class ReactPlanner:
         llm_max_retries: int = 3,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        reasoning_display: ReasoningDisplay = None,
         llm_fallback: ModelFallbackConfig | None = None,
         absolute_max_parallel: int = 50,
         reflection_config: ReflectionConfig | None = None,
@@ -487,6 +489,7 @@ class ReactPlanner:
             "llm_max_retries": llm_max_retries,
             "use_native_reasoning": use_native_reasoning,
             "reasoning_effort": reasoning_effort,
+            "reasoning_display": reasoning_display,
             "llm_fallback": llm_fallback,
             "absolute_max_parallel": absolute_max_parallel,
             "reflection_config": reflection_config,
@@ -545,6 +548,7 @@ class ReactPlanner:
             llm_max_retries=llm_max_retries,
             use_native_reasoning=use_native_reasoning,
             reasoning_effort=reasoning_effort,
+            reasoning_display=reasoning_display,
             llm_fallback=llm_fallback,
             absolute_max_parallel=absolute_max_parallel,
             reflection_config=reflection_config,
