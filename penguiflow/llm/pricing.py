@@ -5,9 +5,16 @@ Maintains a pricing table and calculates cost from normalized Usage.
 
 from __future__ import annotations
 
+import importlib
 import logging
+from decimal import Decimal
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
 from .types import Cost, Usage
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger("penguiflow.llm.pricing")
 
@@ -39,6 +46,8 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.4-pro": (0.03, 0.18),  # $30/$180 per 1M tokens
     "gpt-5.4-mini": (0.00075, 0.0045),  # $0.75/$4.50 per 1M tokens
     "gpt-5.4-nano": (0.0002, 0.00125),  # $0.20/$1.25 per 1M tokens
+    "gpt-5.5": (0.005, 0.03),  # $5/$30 per 1M tokens
+    "gpt-5.5-pro": (0.03, 0.18),  # $30/$180 per 1M tokens
     # OpenAI - GPT Series
     "gpt-4o": (0.0025, 0.01),  # $2.50/$10.00 per 1M tokens
     "gpt-4o-mini": (0.00015, 0.0006),  # $0.15/$0.60 per 1M tokens
@@ -62,6 +71,11 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-5": (0.005, 0.025),  # $5/$25 per 1M tokens
     "claude-sonnet-4-5": (0.003, 0.015),  # $3/$15 per 1M tokens
     "claude-haiku-4-5": (0.001, 0.005),  # $1/$5 per 1M tokens
+    # Anthropic - Claude 4.8 Series
+    # Assumed same rate card as Opus 4.7 - verify against account pricing.
+    "claude-opus-4-8": (0.005, 0.025),  # $5/$25 per 1M tokens
+    # Anthropic - Claude 4.7 Series
+    "claude-opus-4-7": (0.005, 0.025),  # $5/$25 per 1M tokens
     # Anthropic - Claude 4.6 Series
     "claude-opus-4-6": (0.005, 0.025),  # $5/$25 per 1M tokens
     "claude-sonnet-4-6": (0.003, 0.015),  # $3/$15 per 1M tokens
@@ -86,6 +100,7 @@ PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.0-flash-exp": (0.0, 0.0),  # Experimental/Free tier
     "gemini-2.0-flash-thinking": (0.0, 0.0),  # Experimental/Free tier
     # Google - Gemini 3.x Series (OpenRouter catalog, March 2026)
+    "gemini-3.5-flash": (0.0015, 0.009),  # $1.50/$9 per 1M tokens
     "gemini-3-flash-preview": (0.0005, 0.003),  # $0.50/$3 per 1M tokens
     "gemini-3-pro-preview": (0.002, 0.012),  # $2/$12 per 1M tokens
     "gemini-3-pro-image-preview": (0.002, 0.012),  # $2/$12 per 1M tokens
@@ -129,9 +144,20 @@ PRICING: dict[str, tuple[float, float]] = {
     "databricks-claude-sonnet-4": (0.003, 0.015),
     "databricks-claude-sonnet-4-5": (0.003, 0.015),
     "databricks-claude-sonnet-4-6": (0.003, 0.015),
+    # Anthropic introductory Sonnet 5 rate through 2026-08-31;
+    # update to $3/$15 per MTok on 2026-09-01.
+    "databricks-claude-sonnet-5": (0.002, 0.01),
     "databricks-claude-opus-4-5": (0.005, 0.025),
     "databricks-claude-opus-4-6": (0.005, 0.025),
+    "databricks-claude-opus-4-7": (0.005, 0.025),
+    # Assumed same rate card as Opus 4.7 - verify against account pricing.
+    "databricks-claude-opus-4-8": (0.005, 0.025),
     "databricks-claude-haiku-4-5": (0.001, 0.005),
+    "databricks-gemini-3-5-flash": (0.0015, 0.009),
+    "databricks-gpt-5-4-mini": (0.00075, 0.0045),
+    "databricks-gpt-5-4-nano": (0.0002, 0.00125),
+    "databricks-gpt-5-5": (0.005, 0.03),
+    "databricks-gpt-5-5-pro": (0.03, 0.18),
     # DeepSeek
     "deepseek-r1": (0.00056, 0.00168),  # $0.56/$1.68 per 1M tokens
     "deepseek-chat": (0.00089, 0.0011),  # $0.89/$1.10 per 1M tokens (V3)
@@ -182,15 +208,17 @@ PRICING: dict[str, tuple[float, float]] = {
     "nvidia/nemotron-3-super-120b-a12b": (0.0001, 0.0005),  # $0.10/$0.50 per 1M tokens
 }
 
+_REGISTERED_PRICING: dict[str, tuple[float, float]] = {}
+_PROVIDER_PREFIXES = ("databricks-",)
+
 
 def _pricing_candidates(model: str) -> list[str]:
     """Generate exact and normalized candidates for nested model identifiers."""
     seen: set[str] = set()
     candidates: list[str] = []
 
-    parts = model.split("/")
-    for idx in range(len(parts)):
-        candidate = "/".join(parts[idx:])
+    def add(candidate: str) -> None:
+        candidate = candidate.strip()
         if candidate and candidate not in seen:
             seen.add(candidate)
             candidates.append(candidate)
@@ -200,7 +228,109 @@ def _pricing_candidates(model: str) -> list[str]:
             seen.add(normalized)
             candidates.append(normalized)
 
+    parts = model.strip().split("/")
+    for idx in range(len(parts)):
+        candidate = "/".join(parts[idx:])
+        add(candidate)
+
+        for prefix in _PROVIDER_PREFIXES:
+            if candidate.startswith(prefix):
+                add(candidate.removeprefix(prefix))
+
     return candidates
+
+
+@cache
+def _genai_prices_module() -> Any | None:
+    """Import genai-prices lazily because pricing automation is optional."""
+    try:
+        return importlib.import_module("genai_prices")
+    except ImportError:
+        return None
+
+
+def _lookup_registered_pricing(candidates: Iterable[str]) -> tuple[float, float] | None:
+    candidate_list = list(candidates)
+    for candidate in candidate_list:
+        if candidate in _REGISTERED_PRICING:
+            return _REGISTERED_PRICING[candidate]
+
+    prefix_matches: list[tuple[int, tuple[float, float]]] = []
+    for key, price in _REGISTERED_PRICING.items():
+        for candidate in candidate_list:
+            if candidate.startswith(key):
+                prefix_matches.append((len(key), price))
+                break
+    if prefix_matches:
+        return max(prefix_matches, key=lambda item: item[0])[1]
+
+    return None
+
+
+def _lookup_static_pricing(candidates: list[str]) -> tuple[float, float] | None:
+    for candidate in candidates:
+        if candidate in PRICING:
+            return PRICING[candidate]
+
+    # Prefix match for versioned models
+    for key, price in PRICING.items():
+        for candidate in candidates:
+            if candidate.startswith(key):
+                return price
+
+    return None
+
+
+def _lookup_exact_static_zero_pricing(candidates: list[str]) -> tuple[float, float] | None:
+    """Preserve explicit static free-tier entries before broad upstream matches."""
+    for candidate in candidates:
+        if PRICING.get(candidate) == (0.0, 0.0):
+            return (0.0, 0.0)
+    return None
+
+
+def _lookup_genai_pricing(model: str) -> tuple[float, float] | None:
+    """Resolve base per-1K prices through genai-prices.
+
+    The public ``get_pricing()`` facade has always returned base per-1K rates,
+    not a usage-specific bill. Querying a small 1K/1K synthetic usage keeps
+    tiered models on their base tier while ``calculate_cost()`` can still use
+    the real token counts below.
+    """
+    cost = _calculate_genai_cost(model, input_tokens=1000, output_tokens=1000)
+    if cost is None:
+        return None
+    return (cost.input_cost, cost.output_cost)
+
+
+def _calculate_genai_cost(model: str, *, input_tokens: int, output_tokens: int) -> Cost | None:
+    genai_prices = _genai_prices_module()
+    if genai_prices is None:
+        return None
+
+    for candidate in _pricing_candidates(model):
+        try:
+            usage = genai_prices.Usage(input_tokens=input_tokens, output_tokens=output_tokens)
+            calculation = genai_prices.calc_price(usage, model_ref=candidate)
+        except (LookupError, ValueError):
+            continue
+        except Exception:
+            logger.debug("genai-prices lookup failed for model %r", candidate, exc_info=True)
+            continue
+
+        input_cost = _decimal_to_float(calculation.input_price)
+        output_cost = _decimal_to_float(calculation.output_price)
+        return Cost(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=input_cost + output_cost,
+        )
+
+    return None
+
+
+def _decimal_to_float(value: Decimal | float | int) -> float:
+    return float(value)
 
 
 def get_pricing(model: str) -> tuple[float, float]:
@@ -214,15 +344,17 @@ def get_pricing(model: str) -> tuple[float, float]:
     """
     candidates = _pricing_candidates(model)
 
-    for candidate in candidates:
-        if candidate in PRICING:
-            return PRICING[candidate]
+    if registered := _lookup_registered_pricing(candidates):
+        return registered
 
-    # Prefix match for versioned models
-    for key, price in PRICING.items():
-        for candidate in candidates:
-            if candidate.startswith(key):
-                return price
+    if static_zero_price := _lookup_exact_static_zero_pricing(candidates):
+        return static_zero_price
+
+    if genai_price := _lookup_genai_pricing(model):
+        return genai_price
+
+    if static_price := _lookup_static_pricing(candidates):
+        return static_price
 
     # Default: unknown pricing (free)
     logger.warning(
@@ -242,7 +374,22 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     Returns:
         Total cost in USD.
     """
-    input_price, output_price = get_pricing(model)
+    candidates = _pricing_candidates(model)
+    if registered := _lookup_registered_pricing(candidates):
+        input_price, output_price = registered
+        return (input_tokens * input_price / 1000) + (output_tokens * output_price / 1000)
+
+    if static_zero_price := _lookup_exact_static_zero_pricing(candidates):
+        input_price, output_price = static_zero_price
+        return (input_tokens * input_price / 1000) + (output_tokens * output_price / 1000)
+
+    if genai_cost := _calculate_genai_cost(model, input_tokens=input_tokens, output_tokens=output_tokens):
+        return genai_cost.total_cost
+
+    if static_price := _lookup_static_pricing(candidates):
+        input_price, output_price = static_price
+    else:
+        input_price, output_price = get_pricing(model)
     return (input_tokens * input_price / 1000) + (output_tokens * output_price / 1000)
 
 
@@ -256,6 +403,26 @@ def calculate_cost_from_usage(model: str, usage: Usage) -> Cost:
     Returns:
         Cost breakdown.
     """
+    candidates = _pricing_candidates(model)
+    if registered := _lookup_registered_pricing(candidates):
+        input_price, output_price = registered
+        input_cost = usage.input_tokens * input_price / 1000
+        output_cost = usage.output_tokens * output_price / 1000
+        return Cost(input_cost=input_cost, output_cost=output_cost, total_cost=input_cost + output_cost)
+
+    if static_zero_price := _lookup_exact_static_zero_pricing(candidates):
+        input_price, output_price = static_zero_price
+        input_cost = usage.input_tokens * input_price / 1000
+        output_cost = usage.output_tokens * output_price / 1000
+        return Cost(input_cost=input_cost, output_cost=output_cost, total_cost=input_cost + output_cost)
+
+    if genai_cost := _calculate_genai_cost(
+        model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+    ):
+        return genai_cost
+
     input_price, output_price = get_pricing(model)
     input_cost = usage.input_tokens * input_price / 1000
     output_cost = usage.output_tokens * output_price / 1000
@@ -275,4 +442,5 @@ def register_pricing(model: str, input_price: float, output_price: float) -> Non
         input_price: Price per 1K input tokens in USD.
         output_price: Price per 1K output tokens in USD.
     """
+    _REGISTERED_PRICING[model] = (input_price, output_price)
     PRICING[model] = (input_price, output_price)

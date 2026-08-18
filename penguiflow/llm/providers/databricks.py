@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -47,6 +48,7 @@ from ..types import (
     ToolCallPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import OpenAICompatibleProvider
 
 if TYPE_CHECKING:
@@ -56,6 +58,8 @@ DatabricksTokenProvider = Callable[[], str | Awaitable[str]]
 DatabricksAuthMode = str
 
 
+logger = logging.getLogger("penguiflow.llm.providers.databricks")
+
 class DatabricksProvider(OpenAICompatibleProvider):
     """Databricks provider using OpenAI-compatible API.
 
@@ -64,12 +68,16 @@ class DatabricksProvider(OpenAICompatibleProvider):
     calling (GA as of 2025).
 
     Available model families (January 2026):
-    - OpenAI GPT-5 series: databricks-gpt-5-2, databricks-gpt-5-1, databricks-gpt-5,
-      databricks-gpt-5-mini, databricks-gpt-5-nano, databricks-gpt-oss-120b, databricks-gpt-oss-20b
-    - Anthropic Claude: databricks-claude-opus-4-5, databricks-claude-sonnet-4-5,
-      databricks-claude-haiku-4-5, databricks-claude-sonnet-4, databricks-claude-opus-4-1
-    - Google Gemini: databricks-gemini-3-flash, databricks-gemini-3-pro,
-      databricks-gemini-2-5-pro, databricks-gemini-2-5-flash, databricks-gemma-3-12b
+    - OpenAI GPT-5 series: databricks-gpt-5-5-pro, databricks-gpt-5-5,
+      databricks-gpt-5-4-mini, databricks-gpt-5-4-nano, databricks-gpt-5-2,
+      databricks-gpt-5-1, databricks-gpt-5, databricks-gpt-5-mini, databricks-gpt-5-nano,
+      databricks-gpt-oss-120b, databricks-gpt-oss-20b
+    - Anthropic Claude: databricks-claude-opus-4-7, databricks-claude-opus-4-5,
+      databricks-claude-sonnet-4-5, databricks-claude-haiku-4-5, databricks-claude-sonnet-4,
+      databricks-claude-opus-4-1
+    - Google Gemini: databricks-gemini-3-5-flash, databricks-gemini-3-flash,
+      databricks-gemini-3-pro, databricks-gemini-2-5-pro, databricks-gemini-2-5-flash,
+      databricks-gemma-3-12b
     - Meta Llama: databricks-llama-4-maverick, databricks-meta-llama-3-3-70b-instruct,
       databricks-meta-llama-3-1-405b-instruct, databricks-meta-llama-3-1-8b-instruct
     - Alibaba Qwen: databricks-qwen3-next-80b-a3b-instruct
@@ -400,6 +408,7 @@ class DatabricksProvider(OpenAICompatibleProvider):
         usage: Usage | None = None
         finish_reason: str | None = None
         reasoning_acc: list[str] = []
+        saw_redacted_reasoning = False
 
         try:
             async with asyncio.timeout(timeout):
@@ -448,14 +457,29 @@ class DatabricksProvider(OpenAICompatibleProvider):
                                 on_stream_event(StreamEvent(delta_text=item["text"]))
                             elif item_type in ("reasoning", "thinking", "thought"):
                                 summary = item.get("summary")
+                                emitted_reasoning = False
                                 if isinstance(summary, list):
                                     for s in summary:
                                         if isinstance(s, dict) and isinstance(s.get("text"), str) and s["text"]:
+                                            emitted_reasoning = True
                                             reasoning_acc.append(s["text"])
                                             on_stream_event(StreamEvent(delta_reasoning=s["text"]))
-                                elif isinstance(item.get("text"), str) and item["text"]:
+                                if not emitted_reasoning and isinstance(item.get("text"), str) and item["text"]:
+                                    emitted_reasoning = True
                                     reasoning_acc.append(item["text"])
                                     on_stream_event(StreamEvent(delta_reasoning=item["text"]))
+                                if not emitted_reasoning and not saw_redacted_reasoning:
+                                    # Verified live 2026-06-12 (Opus 4.7 AND 4.8, adaptive
+                                    # thinking): the route returns reasoning blocks whose
+                                    # summary_text is EMPTY with only a cryptographic
+                                    # signature - thinking happens server-side but its
+                                    # content is redacted. Nothing visible to emit; there
+                                    # is no output_config.summary knob (400) to change it.
+                                    saw_redacted_reasoning = True
+                                    logger.info(
+                                        "databricks_reasoning_redacted_by_route",
+                                        extra={"model": self._model},
+                                    )
 
                     # If we already parsed reasoning blocks from a list-shaped delta content,
                     # don't double-emit via the generic OpenAI delta extractor.
@@ -519,8 +543,16 @@ class DatabricksProvider(OpenAICompatibleProvider):
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._to_openai_messages(request.messages),
-            "temperature": request.temperature,
         }
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            params["temperature"] = temp
 
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens
@@ -543,11 +575,28 @@ class DatabricksProvider(OpenAICompatibleProvider):
             extra = dict(request.extra)
 
             reasoning_effort = extra.pop("reasoning_effort", None)
+            reasoning_display = extra.pop("reasoning_display", None)
             if isinstance(reasoning_effort, str) and reasoning_effort:
-                model_id = self._model
+                style = self._resolve_reasoning_request_style()
 
-                # Claude + Gemini 2.5 use a "thinking" budget (hybrid reasoning).
-                if model_id.startswith("databricks-claude-") or model_id.startswith("databricks-gemini-2-5-"):
+                # Adaptive thinking + output_config.effort (Claude Opus 4.7/4.8).
+                if style == "adaptive_effort" and "thinking" not in extra:
+                    effort = reasoning_effort.strip().lower()
+                    if effort in ("none", "off", "disabled", "false", "0"):
+                        params["thinking"] = {"type": "disabled"}
+                    else:
+                        if "thinking" not in params:
+                            params["thinking"] = {"type": "adaptive"}
+                            if reasoning_display in ("summarized", "omitted"):
+                                params["thinking"]["display"] = reasoning_display
+                        output_config = params.get("output_config")
+                        if not isinstance(output_config, dict):
+                            output_config = {}
+                        output_config.setdefault("effort", effort)
+                        params["output_config"] = output_config
+
+                # Thinking budget (older Claude models and Gemini 2.5).
+                elif style == "thinking_budget":
                     # Respect an explicit thinking config if the caller provided one.
                     if "thinking" not in extra and "thinking" not in params:
                         effort = reasoning_effort.strip().lower()
@@ -556,15 +605,13 @@ class DatabricksProvider(OpenAICompatibleProvider):
                             if budget_tokens > 0:
                                 params["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
 
-                # GPT OSS + Gemini 3 accept reasoning_effort directly.
-                elif model_id.startswith("databricks-gpt-oss-") or model_id.startswith("databricks-gemini-3-"):
+                # Direct reasoning_effort passthrough (GPT OSS, Gemini 3, GPT-5
+                # family — allowed values vary per model; pass as-is).
+                elif style == "reasoning_effort":
                     params["reasoning_effort"] = reasoning_effort
 
-                # GPT-5 family also accepts reasoning_effort, but the allowed values vary;
-                # pass through as-is when supplied.
-                elif model_id.startswith("databricks-gpt-5"):
-                    params["reasoning_effort"] = reasoning_effort
-
+            for param in self._profile.unsupported_request_params:
+                extra.pop(param, None)
             params.update(extra)
 
         self._ensure_thinking_budget_and_max_tokens(
@@ -592,7 +639,9 @@ class DatabricksProvider(OpenAICompatibleProvider):
 
         budget_tokens = thinking.get("budget_tokens")
         if not isinstance(budget_tokens, int) or budget_tokens <= 0:
-            params.pop("thinking", None)
+            # Keep non-budgeted thinking modes such as {"type": "adaptive"}.
+            if str(thinking.get("type", "")).strip().lower() == "enabled":
+                params.pop("thinking", None)
             return
 
         max_tokens = params.get("max_tokens")
@@ -639,6 +688,30 @@ class DatabricksProvider(OpenAICompatibleProvider):
                     params.pop("thinking", None)
                     return
                 thinking["budget_tokens"] = budget_tokens
+
+    _REASONING_REQUEST_STYLES = ("adaptive_effort", "thinking_budget", "reasoning_effort")
+
+    def _resolve_reasoning_request_style(self) -> str | None:
+        """Resolve how a reasoning-effort request is expressed for this model.
+
+        The model profile is authoritative (``ModelProfile.reasoning_request_style``);
+        model-name heuristics are the fallback for unprofiled models. Unknown
+        profile values fall back to the heuristics rather than failing.
+        """
+        style = getattr(self._profile, "reasoning_request_style", None)
+        if style in self._REASONING_REQUEST_STYLES:
+            return style
+
+        model_id = self._model
+        # Claude Opus 4.7+ rejects thinking budgets ("thinking.type.enabled is
+        # not supported for this model") in favour of adaptive thinking.
+        if model_id.startswith(("databricks-claude-opus-4-7", "databricks-claude-opus-4-8")):
+            return "adaptive_effort"
+        if model_id.startswith(("databricks-claude-", "databricks-gemini-2-5-")):
+            return "thinking_budget"
+        if model_id.startswith(("databricks-gpt-oss-", "databricks-gemini-3-", "databricks-gpt-5")):
+            return "reasoning_effort"
+        return None
 
     def _thinking_budget_tokens_for_effort(self, effort: str) -> int:
         """Map reasoning effort tiers to Databricks 'thinking' budget_tokens.

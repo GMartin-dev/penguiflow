@@ -34,6 +34,7 @@ from ..types import (
     ToolResultPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import Provider
 
 if TYPE_CHECKING:
@@ -336,8 +337,14 @@ class AnthropicProvider(Provider):
         if system_text:
             params["system"] = system_text
 
-        if request.temperature > 0:
-            params["temperature"] = request.temperature
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            params["temperature"] = temp
 
         if request.tools:
             params["tools"] = self._to_anthropic_tools(request.tools)

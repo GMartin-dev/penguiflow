@@ -27,8 +27,20 @@ class ModelProfile:
     supports_schema_guided_output: bool = False  # Provider-native schema-guided structured output
     supports_json_only_output: bool = True  # Provider-native "JSON only" mode (if supported)
     supports_tools: bool = True  # Tool/function calling
+    # Whether provider-native function calling works on this model's ROUTE
+    # (distinct from supports_tools: the model may support tools while the
+    # serving endpoint rejects native function calling, e.g. Databricks
+    # gpt-5.5 requires the Responses API). Gates the planner's native
+    # tool-calling mode; ineligible models downgrade to prompted mode.
+    supports_native_tool_calls: bool = True
     supports_reasoning: bool = False  # Native reasoning (o1, o3, deepseek-r1)
     supports_streaming: bool = True  # Streaming responses
+    supports_image_input: bool = False  # Image content parts in user messages
+    supports_audio_input: bool = False  # Audio content parts in user messages
+    # Whether the model accepts an explicit `temperature` value. False for
+    # models that reject the parameter (e.g. Databricks GPT-5 reasoning models
+    # accept only the default; databricks-claude-opus-4-7 rejects it outright).
+    supports_temperature: bool = True
 
     # Output mode selection
     default_output_mode: Literal["native", "tools", "prompted"] = "native"
@@ -50,11 +62,28 @@ class ModelProfile:
     # Reasoning configuration
     reasoning_effort_param: str | None = None  # Parameter name if supported
     thinking_tags: tuple[str, str] | None = None  # e.g., ("<think>", "</think>")
+    # Controls visibility of adaptive-thinking summaries.
+    reasoning_display_default: Literal["summarized", "omitted"] | None = None
+    # How a reasoning-effort request is expressed for this model:
+    # - "adaptive_effort": thinking={"type": "adaptive"} + output_config.effort
+    #   (e.g. Databricks Claude Opus 4.7/4.8)
+    # - "thinking_budget": thinking={"type": "enabled", "budget_tokens": N}
+    # - "reasoning_effort": pass the reasoning_effort parameter through as-is
+    # None: the provider falls back to model-name heuristics.
+    reasoning_request_style: Literal["adaptive_effort", "thinking_budget", "reasoning_effort"] | None = None
+
+    # Transport pinning. None = follow the adapter-level `transport` selection;
+    # set to pin this model to a transport regardless of the default (an
+    # explicit `transport=` kwarg still wins). E.g. Databricks Claude
+    # reasoning models pin "native" while the generic transport cannot parse
+    # their reasoning content blocks.
+    preferred_transport: Literal["native", "pydantic-ai"] | None = None
 
     # Provider quirks
     strict_mode_default: bool = True  # Default for strict JSON schema
     supports_system_role: bool = True  # Some models need user role for system
     drop_unsupported_params: bool = True  # Silently drop unknown params
+    unsupported_request_params: frozenset[str] = frozenset()  # Parameters rejected by this model route
     max_tools: int | None = None  # Maximum number of tools allowed
     max_schema_keys: int | None = None  # Maximum schema keys (e.g., Databricks: 64)
 

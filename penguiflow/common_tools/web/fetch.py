@@ -97,6 +97,10 @@ async def _resolve_and_validate_host(host: str, *, allow_private_networks: bool)
         if not sockaddr:
             continue
         addr = sockaddr[0]
+        # sockaddr[0] is typed str | int (the int arm is for non-IP address
+        # families); INET/INET6 lookups always yield a str host.
+        if not isinstance(addr, str):
+            continue
         addrs.add(addr)
 
     for addr in addrs:

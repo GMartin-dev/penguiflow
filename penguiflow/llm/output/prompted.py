@@ -59,6 +59,7 @@ Requirements:
         response_model: type[BaseModel],
         profile: ModelProfile,
         plan: SchemaPlan,
+        temperature: float | None = None,
     ) -> LLMRequest:
         """Build a request with schema injection in prompt.
 
@@ -68,6 +69,7 @@ Requirements:
             response_model: Pydantic model for structured output.
             profile: Model profile with capabilities.
             plan: Schema plan with transformed schema.
+            temperature: Optional sampling temperature (opt-in; None omits it).
 
         Returns:
             LLMRequest with schema injected into messages.
@@ -113,7 +115,7 @@ Requirements:
         return LLMRequest(
             model=model,
             messages=tuple(modified_messages),
-            temperature=0.0,
+            temperature=temperature,
         )
 
     def parse_response(

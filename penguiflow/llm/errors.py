@@ -203,6 +203,29 @@ def is_context_length_error(error: Exception | str) -> bool:
     return any(pattern in error_str for pattern in _CONTEXT_LENGTH_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# Temperature Compatibility Detection
+# ---------------------------------------------------------------------------
+
+_TEMPERATURE_PATTERNS = (
+    "does not support the temperature",
+    "does not support temperature",
+    "temperature' does not support",
+    'temperature" does not support',
+    "only the default (1) value is supported",
+)
+
+
+def is_temperature_error(error: Exception | str) -> bool:
+    """Check if an error indicates the model rejects the temperature parameter.
+
+    Covers both "fixed-value" models (only the provider default is accepted)
+    and models that reject the ``temperature`` parameter entirely.
+    """
+    error_str = str(error).lower()
+    return any(pattern in error_str for pattern in _TEMPERATURE_PATTERNS)
+
+
 def extract_clean_error_message(exc: Exception) -> str:
     """Extract a user-friendly error message from an LLM exception.
 

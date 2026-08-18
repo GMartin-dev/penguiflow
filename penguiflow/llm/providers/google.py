@@ -28,6 +28,7 @@ from ..errors import (
 from ..profiles import ModelProfile, get_profile
 from ..types import (
     CompletionResponse,
+    ContentPart,
     ImagePart,
     LLMMessage,
     LLMRequest,
@@ -37,6 +38,7 @@ from ..types import (
     ToolResultPart,
     Usage,
 )
+from ._params import resolve_temperature
 from .base import Provider
 
 if TYPE_CHECKING:
@@ -227,9 +229,7 @@ class GoogleProvider(Provider):
             ) from e
 
         # Build final message
-        out_parts: list[TextPart | ToolCallPart | ToolResultPart | ImagePart] = (
-            [TextPart(text=full_text)] if full_text else []
-        )
+        out_parts: list[ContentPart] = [TextPart(text=full_text)] if full_text else []
 
         on_stream_event(StreamEvent(done=True, usage=usage, finish_reason=finish_reason))
 
@@ -285,9 +285,16 @@ class GoogleProvider(Provider):
         """Build Google API GenerateContentConfig from request."""
         from google.genai import types as genai_types
 
-        config: dict[str, Any] = {
-            "temperature": request.temperature,
-        }
+        config: dict[str, Any] = {}
+
+        temp = resolve_temperature(
+            self._profile,
+            request.temperature,
+            model=self._model,
+            forced_off=self.temperature_unsupported,
+        )
+        if temp is not None:
+            config["temperature"] = temp
 
         if request.max_tokens:
             config["max_output_tokens"] = request.max_tokens
@@ -392,7 +399,7 @@ class GoogleProvider(Provider):
 
     def _from_google_response(self, response: GenerateContentResponse) -> CompletionResponse:
         """Convert Google GenerateContentResponse to CompletionResponse."""
-        parts: list[TextPart | ToolCallPart | ToolResultPart | ImagePart] = []
+        parts: list[ContentPart] = []
         reasoning_acc: list[str] = []
 
         if response.candidates:

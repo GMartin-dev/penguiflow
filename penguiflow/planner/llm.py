@@ -13,6 +13,9 @@ from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel
 
+from ..llm.errors import LLMRateLimitError
+from ..llm.profiles import get_profile
+from ..llm.types import TextPart
 from . import prompts
 from .models import (
     ClarificationResponse,
@@ -344,7 +347,9 @@ def _build_minimal_planner_schema() -> dict[str, Any]:
     return schema
 
 
-def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
+def _build_planner_action_schema_conditional_finish(
+    structured_schema: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """PlannerAction schema with a finish-specific requirement.
 
     Pydantic's `PlannerAction` intentionally excludes `thought` from the JSON
@@ -367,6 +372,13 @@ def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
         "additionalProperties": False,
     }
 
+    finish_args_properties: dict[str, Any] = {"answer": {"type": "string", "minLength": 1}}
+    finish_args_required = ["answer"]
+    if structured_schema is not None:
+        # final_response_model: the structured payload is required on finish.
+        finish_args_properties["structured"] = dict(structured_schema)
+        finish_args_required.append("structured")
+
     conditional: dict[str, Any] = {
         "if": {
             "properties": {"next_node": {"enum": ["final_response"]}},
@@ -376,8 +388,8 @@ def _build_planner_action_schema_conditional_finish() -> dict[str, Any]:
             "properties": {
                 "args": {
                     "type": "object",
-                    "properties": {"answer": {"type": "string", "minLength": 1}},
-                    "required": ["answer"],
+                    "properties": finish_args_properties,
+                    "required": finish_args_required,
                 }
             },
             "required": ["args"],
@@ -545,7 +557,18 @@ class _LiteLLMJSONClient:
         streaming_enabled: bool = False,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        reasoning_display: str | None = None,
+        retry_rate_limit_errors: bool = True,
     ) -> None:
+        import warnings
+
+        warnings.warn(
+            "The litellm-backed client (use_native_llm=False) is deprecated and will be "
+            "removed in a future release. Use the native LLM layer (default) or "
+            "transport='pydantic-ai' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._llm = llm
         self._temperature = temperature
         self._json_schema_mode = json_schema_mode
@@ -554,11 +577,13 @@ class _LiteLLMJSONClient:
         self._streaming_enabled = streaming_enabled
         self._use_native_reasoning = use_native_reasoning
         self._reasoning_effort = reasoning_effort
+        self._reasoning_display = reasoning_display
+        self._retry_rate_limit_errors = retry_rate_limit_errors
 
     async def complete(
         self,
         *,
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None = None,
         stream: bool = False,
         on_stream_chunk: Callable[[str, bool], None] | None = None,
@@ -576,15 +601,39 @@ class _LiteLLMJSONClient:
             params = {"model": self._llm}
         else:
             params = dict(self._llm)
-        params.setdefault("temperature", self._temperature)
+        model_name = self._llm if isinstance(self._llm, str) else self._llm.get("model", "")
+        profile = get_profile(model_name)
+        if not isinstance(self._llm, str):
+            for param in profile.unsupported_request_params:
+                params.pop(param, None)
+            if not profile.supports_temperature:
+                params.pop("temperature", None)
+        if profile.supports_temperature:
+            params.setdefault("temperature", self._temperature)
         params["messages"] = list(messages)
 
         # Only pass reasoning_effort if the model actually supports native reasoning.
         # Some providers (e.g., Databricks) crash during parameter mapping if
         # reasoning_effort is passed to non-reasoning models, even with drop_params=True.
-        model_name = self._llm if isinstance(self._llm, str) else self._llm.get("model", "")
-        if self._use_native_reasoning and self._reasoning_effort is not None and _supports_reasoning(model_name):
-            params["reasoning_effort"] = self._reasoning_effort
+        if (
+            self._use_native_reasoning
+            and self._reasoning_effort is not None
+            and (_supports_reasoning(model_name) or profile.reasoning_request_style == "adaptive_effort")
+        ):
+            if profile.reasoning_request_style == "adaptive_effort":
+                effort = str(self._reasoning_effort).strip().lower()
+                if effort in ("none", "off", "disabled", "false", "0"):
+                    params["thinking"] = {"type": "disabled"}
+                else:
+                    params["thinking"] = {"type": "adaptive"}
+                    display = self._reasoning_display
+                    if display not in {"summarized", "omitted"}:
+                        display = profile.reasoning_display_default
+                    if display is not None:
+                        params["thinking"]["display"] = display
+                    params["output_config"] = {"effort": effort}
+            else:
+                params["reasoning_effort"] = self._reasoning_effort
             # Providers vary in support; drop unsupported params instead of failing.
             params.setdefault("drop_params", True)
         if self._json_schema_mode and response_format is not None:
@@ -876,6 +925,8 @@ class _LiteLLMJSONClient:
                 last_error = exc
                 error_type = exc.__class__.__name__
                 if "RateLimit" in error_type or "ServiceUnavailable" in error_type:
+                    if "RateLimit" in error_type and not self._retry_rate_limit_errors:
+                        raise LLMRateLimitError(message=str(exc), provider="litellm", status_code=429) from exc
                     backoff_s = 2**attempt
                     logger.warning(
                         "llm_retry",
@@ -898,14 +949,33 @@ class _LiteLLMJSONClient:
         raise RuntimeError(msg) from last_error
 
 
-def _estimate_size(messages: Sequence[Mapping[str, str]]) -> int:
+def supports_callback_streaming(client: Any) -> bool:
+    """Whether a planner client honors the callback-based streaming contract.
+
+    Returns True for the native adapter, the LiteLLM JSON client, and the
+    fallback wrappers that delegate to either of those. Including the wrappers
+    means enabling ``llm_fallback`` no longer silently disables streaming /
+    reasoning callbacks. (A 429 *after* output has already streamed cannot be
+    transparently retried — the wrapper raises so the planner retries the step
+    on a fresh model; mid-stream output is not replayed.)
+    """
+    from penguiflow.llm.fallback import FallbackLLMClient, GenericFallbackLLMClient
+    from penguiflow.llm.protocol import NativeLLMAdapter
+
+    return isinstance(
+        client,
+        (_LiteLLMJSONClient, NativeLLMAdapter, FallbackLLMClient, GenericFallbackLLMClient),
+    )
+
+
+def _estimate_size(messages: Sequence[Mapping[str, Any]]) -> int:
     """Estimate token count for messages."""
 
     total_chars = 0
     for item in messages:
         content = item.get("content", "")
         role = item.get("role", "")
-        total_chars += len(content)
+        total_chars += len(content) if isinstance(content, str) else len(str(content))
         total_chars += len(role) + 20
     estimated_tokens = int(total_chars / 3.5)
     logger.debug(
@@ -915,7 +985,7 @@ def _estimate_size(messages: Sequence[Mapping[str, str]]) -> int:
     return estimated_tokens
 
 
-async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str, str]]:
+async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str, Any]]:
     llm_context = trajectory.llm_context
     conversation_memory = None
     external_memory = None
@@ -1038,7 +1108,7 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
             or system_prompt
         )
 
-    messages: list[dict[str, str]] = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
     if external_memory is not None:
@@ -1055,19 +1125,16 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
                 "content": prompts.render_read_only_conversation_memory(conversation_memory),
             }
         )
-    messages.extend(
-        [
-            {
-                "role": "user",
-                "content": prompts.build_user_prompt(
-                    trajectory.query,
-                    llm_context,
-                ),
-            },
-        ]
+    user_prompt = prompts.build_user_prompt(
+        trajectory.query,
+        llm_context,
     )
+    user_content: Any = user_prompt
+    if trajectory.input_parts:
+        user_content = [TextPart(text=user_prompt), *trajectory.input_parts]
+    messages.append({"role": "user", "content": user_content})
 
-    history_messages: list[dict[str, str]] = []
+    history_messages: list[dict[str, Any]] = []
     for step in trajectory.steps:
         action_for_llm = {
             "next_node": step.action.next_node,
@@ -1125,7 +1192,7 @@ async def build_messages(planner: Any, trajectory: Trajectory) -> list[dict[str,
         "role": "system",
         "content": prompts.render_summary(summary.compact()),
     }
-    condensed: list[dict[str, str]] = messages + [summary_message]
+    condensed: list[dict[str, Any]] = messages + [summary_message]
     if trajectory.steps:
         last_step = trajectory.steps[-1]
         last_action_for_llm = {
@@ -1293,12 +1360,10 @@ async def request_revision(
     messages.append({"role": "user", "content": revision_prompt})
 
     # Enable streaming for revision if callback provided and client supports it
-    from penguiflow.llm.protocol import NativeLLMAdapter
-
     stream_allowed = (
         on_stream_chunk is not None
         and planner._stream_final_response
-        and isinstance(planner._client, (_LiteLLMJSONClient, NativeLLMAdapter))
+        and supports_callback_streaming(planner._client)
     )
 
     llm_result = await planner._client.complete(

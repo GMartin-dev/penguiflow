@@ -702,6 +702,8 @@ def build_system_prompt(
     planning_hints: Mapping[str, Any] | None = None,
     current_date: str | None = None,
     tool_examples: ToolExamplesConfig | None = None,
+    structured_final_schema: Mapping[str, Any] | None = None,
+    tool_call_mode: str = "prompted",
 ) -> str:
     """Build comprehensive system prompt for the planner.
 
@@ -761,7 +763,40 @@ Current date: {current_date}
     # ─────────────────────────────────────────────────────────────
     # OUTPUT FORMAT (NON-NEGOTIABLE)
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<output_format>
+    native_mode = tool_call_mode == "native"
+
+    if native_mode and structured_final_schema is not None:
+        # Structured finishing is the one case where text + a tool call belong in
+        # the same turn (answer streams as text, `final_response` carries the
+        # structured object), so the finish rule below differs from plain native.
+        prompt_sections.append("""<output_format>
+You act through provider-native function calling: the tools in your catalog are declared
+to you directly by the API.
+
+- To act, CALL one or more tools (native function calls). Do not describe tool calls in text.
+- To run tools in parallel, emit MULTIPLE tool calls in a single turn.
+- For INTERMEDIATE steps, when you call tools emit ONLY the tool calls - NO accompanying
+  text, no preamble, no narration.
+- When you have enough information, FINISH by writing your complete answer as PLAIN TEXT
+  AND calling the `final_response` tool in the same turn (see finishing). This is the only
+  turn where plain text and a tool call go together.
+- Never emit a JSON action envelope (no next_node/args wrapper) - call tools natively instead.
+</output_format>""")
+    elif native_mode:
+        prompt_sections.append("""<output_format>
+You act through provider-native function calling: the tools in your catalog are declared
+to you directly by the API.
+
+- To act, CALL one or more tools (native function calls). Do not describe tool calls in text.
+- To run tools in parallel, emit MULTIPLE tool calls in a single turn.
+- CRITICAL: when you call tools, emit ONLY the tool calls - NO accompanying text, no preamble,
+  no narration. Plain text is reserved EXCLUSIVELY for your final answer.
+- When you have enough information, FINISH by replying with your complete answer as PLAIN TEXT
+  with NO tool calls. Plain text with no tool call IS the final answer shown to the user.
+- Never emit a JSON action envelope (no next_node/args wrapper) - call tools natively instead.
+</output_format>""")
+    else:
+        prompt_sections.append("""<output_format>
 Think briefly (internally), then respond with a single JSON object that matches the PlannerAction schema.
 If a tool would help, set "next_node" to the tool name and provide "args".
 Write your JSON inside one markdown code block (```json ... ```).
@@ -777,7 +812,8 @@ Important:
     # ─────────────────────────────────────────────────────────────
     # ACTION SCHEMA
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<action_schema>
+    if not native_mode:
+        prompt_sections.append("""<action_schema>
 Every response follows this structure:
 
 {
@@ -838,7 +874,31 @@ Remember: The ONLY place for user-facing text is args.answer when next_node is "
     # ─────────────────────────────────────────────────────────────
     # FINISHING (CRITICAL)
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<finishing>
+    if native_mode and structured_final_schema is not None:
+        prompt_sections.append("""<finishing>
+When you have gathered enough information to answer the query, FINISH in a SINGLE turn
+by doing BOTH of these together:
+
+1. Write your complete, human-readable answer as plain text. This text streams to the
+   user, so write the full response here - not a summary or fragment.
+2. In the SAME turn, call the `final_response` tool with the structured object
+   (see structured_final_response below).
+
+This is the one and only time you emit plain text alongside a tool call. The plain
+text is the user-facing answer; the tool carries the machine-readable version. Do not
+put the answer only inside the tool, and do not call any other tool when finishing.
+</finishing>""")
+    elif native_mode:
+        prompt_sections.append("""<finishing>
+When you have gathered enough information to answer the query, reply with your complete,
+human-readable answer as plain text and make NO tool calls in that turn.
+
+- Write a full, helpful response - not a summary or fragment.
+- Do NOT wrap the answer in JSON or markdown code fences.
+- Do NOT announce that you are finished - just give the answer.
+</finishing>""")
+    else:
+        prompt_sections.append("""<finishing>
 When you have gathered enough information to answer the query:
 
 1. Set "next_node" to "final_response"
@@ -871,6 +931,50 @@ Example finish:
 </finishing>""")
 
     # ─────────────────────────────────────────────────────────────
+    # STRUCTURED FINAL RESPONSE (opt-in via final_response_model)
+    # ─────────────────────────────────────────────────────────────
+    if structured_final_schema is not None and native_mode:
+        schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
+        prompt_sections.append(f"""<structured_final_response>
+To finish, write your human-readable answer as plain text AND call the `final_response`
+tool in the same turn. The tool's "structured" argument must be a JSON object that
+validates against this JSON schema EXACTLY (all required fields, correct types, no extra
+keys unless the schema allows them):
+
+{schema_text}
+
+Rules:
+- The plain-text you write IS the answer shown to the user; "structured" is the
+  machine-readable version of that same answer.
+- "structured" is a plain JSON object - do not wrap it in a string or markdown.
+- Do not repeat the full answer inside the tool; just provide "structured".
+- Call `final_response` only when you are ready to end the run.
+</structured_final_response>""")
+    elif structured_final_schema is not None and not native_mode:
+        schema_text = json.dumps(structured_final_schema, ensure_ascii=False)
+        prompt_sections.append(f"""<structured_final_response>
+When finishing (next_node "final_response"), args MUST ALSO include a "structured" object that
+validates against this JSON schema EXACTLY (all required fields, correct types, no extra keys
+unless the schema allows them):
+
+{schema_text}
+
+Rules:
+- Emit "answer" FIRST inside args, then "structured" (the answer streams to the user).
+- "answer" remains the human-readable text; "structured" is the machine-readable version.
+- Do not wrap "structured" in markdown or strings - it is a plain JSON object.
+
+Example finish shape:
+{{
+  "next_node": "final_response",
+  "args": {{
+    "answer": "...human readable...",
+    "structured": {{ ...matching the schema above... }}
+  }}
+}}
+</structured_final_response>""")
+
+    # ─────────────────────────────────────────────────────────────
     # TOOL USAGE
     # ─────────────────────────────────────────────────────────────
     prompt_sections.append("""<tool_usage>
@@ -890,7 +994,14 @@ Rules for using tools:
     # ─────────────────────────────────────────────────────────────
     # PARALLEL EXECUTION
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<parallel_execution>
+    if native_mode:
+        prompt_sections.append("""<parallel_execution>
+To run independent tools concurrently, emit multiple native tool calls in ONE turn.
+Use this when multiple independent data sources or queries are needed and ordering
+does not matter. Do not emit dependent calls in the same turn - wait for results.
+</parallel_execution>""")
+    else:
+        prompt_sections.append("""<parallel_execution>
 For tasks that benefit from concurrent execution, use parallel plans:
 
 {
@@ -928,13 +1039,14 @@ Use parallel execution when:
     # ─────────────────────────────────────────────────────────────
     # REASONING GUIDANCE
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<reasoning>
+    answer_home = "your final plain-text reply" if native_mode else "args.answer"
+    prompt_sections.append(f"""<reasoning>
 Approach problems systematically:
 
 1. Understand first: Parse the query to identify what's actually being asked
 2. Plan before acting: Consider which tools will help and in what order
 3. Gather evidence: Use tools to collect relevant information
-4. Synthesize: Combine observations into a coherent answer (in args.answer when done)
+4. Synthesize: Combine observations into a coherent answer ({answer_home} when done)
 5. Verify: Check if your answer actually addresses the query
 
 When uncertain:
@@ -947,15 +1059,28 @@ Avoid:
 - Making up information not supported by tool observations
 - Calling the same tool repeatedly with identical arguments
 - Ignoring errors or unexpected results
-- Writing user-facing text during intermediate steps (save it for args.answer)
+- Writing user-facing text during intermediate steps (save it for {answer_home})
 - Generating "preview" answers before you're done gathering information
 </reasoning>""")
 
     # ─────────────────────────────────────────────────────────────
     # TONE & STYLE
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<tone>
-In your answer (ONLY when next_node is "final_response"):
+    tone_scope = (
+        "In your final answer (the plain-text reply with no tool calls):"
+        if native_mode
+        else 'In your answer (ONLY when next_node is "final_response"):'
+    )
+    tone_critical = (
+        "CRITICAL:\n"
+        "- During intermediate steps, emit ONLY tool calls. No commentary text."
+        if native_mode
+        else "CRITICAL:\n"
+        '- During intermediate steps, produce ONLY the JSON action object. Do not add commentary.\n'
+        '- Do not include a "thought" field in the JSON.'
+    )
+    prompt_sections.append(f"""<tone>
+{tone_scope}
 - Be direct and informative - get to the point
 - Use clear, professional language
 - Acknowledge limitations honestly rather than hedging excessively
@@ -965,15 +1090,18 @@ In your answer (ONLY when next_node is "final_response"):
 - These are safe defaults. Your tone or voice can be changed in the additional_guidance section.
 - You can use markdown formatting if suggested in additional_guidance.
 
-CRITICAL:
-- During intermediate steps, produce ONLY the JSON action object. Do not add commentary.
-- Do not include a "thought" field in the JSON.
+{tone_critical}
 </tone>""")
 
     # ─────────────────────────────────────────────────────────────
     # ERROR HANDLING
     # ─────────────────────────────────────────────────────────────
-    prompt_sections.append("""<error_handling>
+    gave_up_instruction = (
+        "Say so plainly in your final answer"
+        if native_mode
+        else "Set requires_followup: true in your finish args"
+    )
+    prompt_sections.append(f"""<error_handling>
 When things go wrong:
 
 Tool validation error: Fix your args to match the schema and retry
@@ -983,7 +1111,7 @@ Ambiguous query: Make reasonable assumptions and note them, or ask for clarifica
 Conflicting information: Acknowledge the conflict and explain your reasoning
 
 If you cannot complete the task after reasonable attempts:
-- Set requires_followup: true in your finish args
+- {gave_up_instruction}
 - Explain what you tried and why it didn't work
 - Suggest what additional information or tools would help
 </error_handling>""")
@@ -1113,7 +1241,38 @@ def render_repair_message(error: str) -> str:
     )
 
 
-def render_arg_repair_message(tool_name: str, error: str) -> str:
+def render_structured_repair_prompt(
+    *,
+    schema: Mapping[str, Any],
+    error: str,
+    answer: str | None,
+) -> str:
+    """Corrective turn for a final response whose structured payload failed validation."""
+    schema_text = json.dumps(schema, ensure_ascii=False)
+    answer_section = f"\nYour answer text was:\n{answer[:2000]}\n" if answer else ""
+    return (
+        "STRUCTURED OUTPUT INVALID: your final response's \"structured\" payload "
+        f"did not validate against the required schema.\n\nValidation error:\n{error}\n"
+        f"{answer_section}\n"
+        f"Required JSON schema:\n{schema_text}\n\n"
+        "Reply with ONLY a single JSON object that validates against the schema above "
+        "(no wrapper, no markdown, no commentary). It must be consistent with your answer."
+    )
+
+
+def render_arg_repair_message(tool_name: str, error: str, *, tool_call_mode: str = "prompted") -> str:
+    if tool_call_mode == "native":
+        return (
+            f"CRITICAL: Your tool call to '{tool_name}' failed validation.\n\n"
+            f"Error: {error}\n\n"
+            "You MUST do ONE of the following:\n\n"
+            f"OPTION 1 - Call '{tool_name}' again with corrected args:\n"
+            "- Provide ALL required arguments with REAL values\n"
+            "- Do NOT use placeholders like '<auto>', 'unknown', 'n/a', or empty strings\n"
+            "- Match the exact schema types (strings, numbers, booleans, arrays)\n\n"
+            "OPTION 2 - If you cannot provide valid args, FINISH instead:\n"
+            "- Reply with plain text explaining why you cannot proceed (no tool calls)."
+        )
     return (
         f"CRITICAL: Your tool call to '{tool_name}' failed validation.\n\n"
         f"Error: {error}\n\n"

@@ -7,11 +7,12 @@ mode selection, retry, and cost tracking.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
+from .fallback import CooldownStore, FallbackProvider, ModelFallbackConfig
 from .output.native import NativeOutputStrategy
 from .output.prompted import PromptedOutputStrategy
 from .output.tool import ToolsOutputStrategy
@@ -48,7 +49,8 @@ class LLMClientConfig:
     retry_on_parse: bool = True
     retry_on_provider_errors: bool = True
     timeout_s: float = 120.0
-    temperature: float = 0.0
+    # Temperature is opt-in: None means the model uses its provider default.
+    temperature: float | None = None
     force_mode: OutputMode | None = None
     enable_telemetry: bool = True
     enable_cost_tracking: bool = True
@@ -64,6 +66,57 @@ class LLMResult:
     mode_used: OutputMode
     attempts: int
     raw_response: Any = None
+
+
+def _merge_fallback_profile(
+    primary_model: str, fallback: ModelFallbackConfig
+) -> ModelProfile:
+    """Conservative capability profile across a fallback chain.
+
+    The booleans that drive output-mode selection are AND-ed across every model
+    in the chain so the mode chosen for the primary is also honored by any model
+    we fail over to. Native schema-guided output additionally requires every
+    model to share the same ``native_structured_kind`` (an OpenAI response-format
+    request is not interchangeable with Databricks constrained decoding).
+
+    Non-capability fields (pricing, token limits, transformers) are inherited
+    from the primary; per-attempt cost is still attributed to the model that
+    actually answered via ``FallbackProvider.model``.
+    """
+    chain = [primary_model]
+    chain.extend(m for m in fallback.models if m != primary_model)
+    profiles = [get_profile(m) for m in chain]
+
+    merged = profiles[0]
+    for other in profiles[1:]:
+        same_native_kind = merged.native_structured_kind == other.native_structured_kind
+        merged = replace(
+            merged,
+            supports_schema_guided_output=(
+                merged.supports_schema_guided_output
+                and other.supports_schema_guided_output
+                and same_native_kind
+            ),
+            supports_json_only_output=(
+                merged.supports_json_only_output and other.supports_json_only_output
+            ),
+            supports_tools=merged.supports_tools and other.supports_tools,
+            supports_native_tool_calls=(
+                merged.supports_native_tool_calls and other.supports_native_tool_calls
+            ),
+            supports_streaming=merged.supports_streaming and other.supports_streaming,
+            supports_image_input=merged.supports_image_input and other.supports_image_input,
+            supports_audio_input=merged.supports_audio_input and other.supports_audio_input,
+            supports_reasoning=merged.supports_reasoning and other.supports_reasoning,
+        )
+
+    # Don't lead with a mode the merged chain can't uniformly satisfy.
+    if merged.default_output_mode == "native" and not merged.supports_schema_guided_output:
+        merged = replace(
+            merged,
+            default_output_mode="tools" if merged.supports_tools else "prompted",
+        )
+    return merged
 
 
 class LLMClient:
@@ -93,6 +146,8 @@ class LLMClient:
         *,
         api_key: str | None = None,
         base_url: str | None = None,
+        fallback: ModelFallbackConfig | None = None,
+        cooldown_store: CooldownStore | None = None,
         config: LLMClientConfig | None = None,
         provider: Provider | None = None,
         profile: ModelProfile | None = None,
@@ -104,6 +159,8 @@ class LLMClient:
             model: Model identifier (e.g., "gpt-4o", "claude-3-5-sonnet").
             api_key: API key (uses environment variable if not provided).
             base_url: Base URL override for OpenAI-compatible endpoints.
+            fallback: Optional model fallback chain applied on 429s.
+            cooldown_store: Optional shared cooldown store used with fallback.
             config: Client configuration.
             provider: Pre-configured provider instance (overrides model-based creation).
             profile: Pre-configured model profile (overrides automatic lookup).
@@ -112,9 +169,22 @@ class LLMClient:
         self.model = model
         self.config = config or LLMClientConfig()
 
+        if provider is not None and fallback is not None:
+            raise ValueError("fallback cannot be combined with a pre-configured provider")
+
         # Create or use provided provider
         if provider is not None:
             self._provider = provider
+        elif fallback is not None:
+            self._provider = FallbackProvider(
+                model,
+                fallback,
+                provider_factory=create_provider,
+                cooldown_store=cooldown_store,
+                default_api_key=api_key,
+                base_url=base_url,
+                **provider_kwargs,
+            )
         else:
             self._provider = create_provider(
                 model,
@@ -126,6 +196,14 @@ class LLMClient:
         # Get or use provided profile
         if profile is not None:
             self._profile = profile
+        elif fallback is not None:
+            # Output mode is chosen ONCE above the FallbackProvider seam and the
+            # resulting request (response_format / tools) is reused across every
+            # model in the chain. Use a capability profile that is the intersection
+            # of all chain models so the chosen mode is honored by whichever model
+            # answers (e.g. downgrade native structured output -> prompted when a
+            # fallback model lacks it).
+            self._profile = _merge_fallback_profile(model, fallback)
         else:
             self._profile = get_profile(self._provider.model)
 
@@ -258,6 +336,7 @@ class LLMClient:
                 pricing_fn=calculate_cost if self.config.enable_cost_tracking else None,
                 profile=self._profile,
                 plan=plan,
+                temperature=temperature if temperature is not None else self.config.temperature,
             )
 
             # Build cost object
@@ -354,6 +433,8 @@ async def generate_structured(
     response_model: type[T],
     *,
     api_key: str | None = None,
+    fallback: ModelFallbackConfig | None = None,
+    cooldown_store: CooldownStore | None = None,
     **kwargs: Any,
 ) -> T:
     """Convenience function for one-shot structured generation.
@@ -363,12 +444,14 @@ async def generate_structured(
         messages: Conversation messages.
         response_model: Pydantic model for structured output.
         api_key: API key.
+        fallback: Optional model fallback chain applied on 429s.
+        cooldown_store: Optional shared cooldown store used with fallback.
         **kwargs: Additional arguments for LLMClient.generate().
 
     Returns:
         Parsed Pydantic model instance.
     """
-    client = LLMClient(model, api_key=api_key)
+    client = LLMClient(model, api_key=api_key, fallback=fallback, cooldown_store=cooldown_store)
     result = await client.generate(messages, response_model, **kwargs)
     return result.data  # type: ignore
 

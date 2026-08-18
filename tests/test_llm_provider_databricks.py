@@ -444,6 +444,7 @@ class TestDatabricksProviderBuildParams:
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-claude-sonnet-4-5"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",
@@ -456,29 +457,50 @@ class TestDatabricksProviderBuildParams:
         assert params["model"] == "databricks-claude-sonnet-4-5"
         assert params["temperature"] == 0.7
 
-    def test_build_params_maps_reasoning_effort_to_thinking_for_claude(self) -> None:
-        """Databricks Claude models use 'thinking' budget_tokens, not reasoning_effort."""
+    def test_build_params_maps_reasoning_effort_to_adaptive_thinking_for_opus_4_7(self) -> None:
+        """Databricks Claude Opus 4.7 uses adaptive thinking + output_config.effort."""
         from penguiflow.llm.providers.databricks import DatabricksProvider
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
-        provider._model = "databricks-claude-sonnet-4-5"
+        provider._model = "databricks-claude-opus-4-7"
         provider._profile = MagicMock()
         provider._profile.max_output_tokens = 64000
 
         request = LLMRequest(
-            model="databricks-claude-sonnet-4-5",
+            model="databricks-claude-opus-4-7",
             messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
             extra={"reasoning_effort": "high"},
         )
 
         params = provider._build_params(request)
         assert "reasoning_effort" not in params
-        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
-        assert isinstance(params["max_tokens"], int)
-        assert params["max_tokens"] > params["thinking"]["budget_tokens"]
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "high"
+        assert "max_tokens" not in params
 
-    def test_build_params_thinking_budget_is_capped_by_max_tokens(self) -> None:
-        """thinking.budget_tokens must be strictly less than max_tokens."""
+    def test_build_params_opus_4_7_adaptive_thinking_keeps_explicit_max_tokens(self) -> None:
+        """Opus 4.7 adaptive thinking should not mutate explicit max_tokens."""
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-4-7"
+        provider._profile = MagicMock()
+        provider._profile.max_output_tokens = 64000
+
+        request = LLMRequest(
+            model="databricks-claude-opus-4-7",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            max_tokens=1024,
+            extra={"reasoning_effort": "high"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "high"
+        assert params["max_tokens"] == 1024
+
+    def test_build_params_non_opus_claude_keeps_budget_thinking(self) -> None:
+        """Non-Opus 4.7 Databricks Claude models keep budget-based thinking."""
         from penguiflow.llm.providers.databricks import DatabricksProvider
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
@@ -489,13 +511,13 @@ class TestDatabricksProviderBuildParams:
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",
             messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
-            max_tokens=1024,
             extra={"reasoning_effort": "high"},
         )
 
         params = provider._build_params(request)
-        assert params["thinking"]["budget_tokens"] == 32768
-        assert params["max_tokens"] == 1024 + 32768
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
+        assert isinstance(params["max_tokens"], int)
+        assert params["max_tokens"] > params["thinking"]["budget_tokens"]
 
     def test_build_params_keeps_reasoning_effort_for_supported_models(self) -> None:
         """GPT OSS/Gemini 3 accept reasoning_effort directly."""
@@ -503,6 +525,7 @@ class TestDatabricksProviderBuildParams:
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-gpt-oss-20b"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-gpt-oss-20b",
@@ -513,12 +536,216 @@ class TestDatabricksProviderBuildParams:
         params = provider._build_params(request)
         assert params["reasoning_effort"] == "high"
 
+    def test_build_params_maps_reasoning_effort_to_adaptive_thinking_for_opus_4_8(self) -> None:
+        """Opus 4.8 rejects thinking budgets; it must use adaptive thinking (regression)."""
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-4-8"
+        provider._profile = MagicMock()
+        provider._profile.max_output_tokens = 64000
+
+        request = LLMRequest(
+            model="databricks-claude-opus-4-8",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "high"},
+        )
+
+        params = provider._build_params(request)
+        assert "reasoning_effort" not in params
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "high"
+
+    def test_build_params_registered_sonnet_5_uses_adaptive_thinking(self) -> None:
+        """Sonnet 5's registered profile requires native adaptive-thinking parameters."""
+        from penguiflow.llm.profiles import get_profile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-5"
+        provider._profile = get_profile(provider._model)
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            temperature=0.0,
+            extra={"reasoning_effort": "low"},
+        )
+
+        params = provider._build_params(request)
+
+        assert "temperature" not in params
+        assert "reasoning_effort" not in params
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"] == {"effort": "low"}
+        assert "budget_tokens" not in params["thinking"]
+
+    def test_build_params_registered_sonnet_5_routes_reasoning_display_to_thinking(self) -> None:
+        """Sonnet 5 accepts reasoning display only in its adaptive thinking payload."""
+        from penguiflow.llm.profiles import get_profile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-5"
+        provider._profile = get_profile(provider._model)
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "high", "reasoning_display": "summarized"},
+        )
+
+        params = provider._build_params(request)
+
+        assert params["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert params["output_config"] == {"effort": "high"}
+        assert "reasoning_display" not in params
+
+    def test_build_params_registered_sonnet_5_drops_unsupported_sampling_params(self) -> None:
+        """Sonnet 5's profile filters sampling parameters Databricks rejects."""
+        from penguiflow.llm.profiles import get_profile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-5"
+        provider._profile = get_profile(provider._model)
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"temperature": 0.0, "top_p": 0.9, "top_k": 40},
+        )
+
+        params = provider._build_params(request)
+
+        assert "temperature" not in params
+        assert "top_p" not in params
+        assert "top_k" not in params
+
+    def test_build_params_opus_4_8_disabled_effort(self) -> None:
+        """A disabled reasoning effort turns thinking off rather than omitting it."""
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-4-8"
+        provider._profile = MagicMock()
+        provider._profile.max_output_tokens = 64000
+
+        request = LLMRequest(
+            model="databricks-claude-opus-4-8",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "none"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "disabled"}
+        assert "output_config" not in params
+
+    def test_build_params_registered_sonnet_5_preserves_explicit_disabled_thinking(self) -> None:
+        """Explicit disabled thinking overrides Sonnet 5 reasoning options."""
+        from penguiflow.llm.profiles import get_profile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-5"
+        provider._profile = get_profile(provider._model)
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={
+                "thinking": {"type": "disabled"},
+                "reasoning_effort": "high",
+                "reasoning_display": "summarized",
+            },
+        )
+
+        params = provider._build_params(request)
+
+        assert params["thinking"] == {"type": "disabled"}
+        assert "output_config" not in params
+        assert "reasoning_effort" not in params
+        assert "reasoning_display" not in params
+
+    def test_build_params_profile_style_overrides_model_heuristics(self) -> None:
+        """ModelProfile.reasoning_request_style wins over model-name heuristics."""
+        from penguiflow.llm.profiles import ModelProfile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-4-7"
+        provider._profile = ModelProfile(
+            reasoning_request_style="thinking_budget",
+            max_output_tokens=64000,
+        )
+
+        request = LLMRequest(
+            model="databricks-claude-opus-4-7",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "high"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
+        assert "output_config" not in params
+
+    def test_build_params_profile_style_covers_unknown_future_model(self) -> None:
+        """A future model needs only a profile entry, not provider code changes."""
+        from penguiflow.llm.profiles import ModelProfile
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-opus-5-0"
+        provider._profile = ModelProfile(
+            reasoning_request_style="adaptive_effort",
+            max_output_tokens=64000,
+        )
+
+        request = LLMRequest(
+            model="databricks-claude-opus-5-0",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "medium"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "adaptive"}
+        assert params["output_config"]["effort"] == "medium"
+
+    def test_build_params_invalid_profile_style_falls_back_to_heuristics(self) -> None:
+        """An unknown/invalid profile style must not break routing (negative path)."""
+        from penguiflow.llm.providers.databricks import DatabricksProvider
+
+        provider = DatabricksProvider.__new__(DatabricksProvider)
+        provider._model = "databricks-claude-sonnet-4-5"
+        provider._profile = MagicMock()  # .reasoning_request_style is a Mock, not a valid style
+        provider._profile.max_output_tokens = 64000
+
+        request = LLMRequest(
+            model="databricks-claude-sonnet-4-5",
+            messages=(LLMMessage(role="user", parts=[TextPart(text="Hello")]),),
+            extra={"reasoning_effort": "high"},
+        )
+
+        params = provider._build_params(request)
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 32768}
+
+    def test_opus_4_8_registered_profile(self) -> None:
+        """The opus-4-8 profile ships with adaptive style and no temperature."""
+        from penguiflow.llm.profiles import get_profile
+
+        profile = get_profile("databricks-claude-opus-4-8")
+        assert profile.reasoning_request_style == "adaptive_effort"
+        assert profile.supports_reasoning is True
+        assert profile.supports_temperature is False
+        assert profile.native_structured_kind == "databricks_constrained_decoding"
+
     def test_build_params_with_structured_output(self) -> None:
         """Test parameter building with structured output."""
         from penguiflow.llm.providers.databricks import DatabricksProvider
 
         provider = DatabricksProvider.__new__(DatabricksProvider)
         provider._model = "databricks-claude-sonnet-4-5"
+        provider._profile = MagicMock()
 
         request = LLMRequest(
             model="databricks-claude-sonnet-4-5",

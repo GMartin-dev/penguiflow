@@ -84,6 +84,8 @@ def extend_tool_catalog(planner: Any, specs: Sequence[NodeSpec]) -> int:
         extra=system_prompt_extra,
         planning_hints=hints_payload,
         tool_examples=getattr(planner, "_tool_examples_config", None),
+        structured_final_schema=getattr(planner, "_final_response_schema", None),
+        tool_call_mode=getattr(planner, "_tool_call_mode", "prompted"),
     )
     return added
 

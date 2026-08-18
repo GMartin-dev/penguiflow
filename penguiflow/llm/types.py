@@ -18,6 +18,20 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 Role = Literal["system", "user", "assistant", "tool"]
+ReasoningDisplay = Literal[None, "summarized", "omitted"]
+
+
+def validate_reasoning_display(reasoning_display: object) -> ReasoningDisplay:
+    """Reject unsupported modes before providers interpret them differently."""
+    if reasoning_display == "summarized":
+        return "summarized"
+    if reasoning_display == "omitted":
+        return "omitted"
+    if reasoning_display is None:
+        return None
+    raise ValueError(
+        "reasoning_display must be one of None, 'summarized', or 'omitted'"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +69,15 @@ class ImagePart:
     detail: Literal["auto", "low", "high"] = "auto"
 
 
-ContentPart = TextPart | ToolCallPart | ToolResultPart | ImagePart
+@dataclass(frozen=True, slots=True)
+class AudioPart:
+    """Audio content part."""
+
+    data: bytes
+    media_type: str  # e.g., "audio/wav", "audio/mpeg"
+
+
+ContentPart = TextPart | ToolCallPart | ToolResultPart | ImagePart | AudioPart
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +153,10 @@ class LLMRequest:
     tools: tuple[ToolSpec, ...] | list[ToolSpec] | None = None
     tool_choice: str | None = None  # Tool name or None
     structured_output: StructuredOutputSpec | None = None
-    temperature: float = 0.0
+    # Temperature is opt-in: None means "do not send temperature" so the model
+    # uses its provider default. Only set this when a caller explicitly wants a
+    # specific sampling temperature.
+    temperature: float | None = None
     max_tokens: int | None = None
     extra: dict[str, Any] | None = None  # Provider-specific passthrough (sanitized)
 

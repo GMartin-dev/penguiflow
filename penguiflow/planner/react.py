@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..artifacts import ArtifactScope, ArtifactStore
 from ..catalog import NodeSpec, build_catalog
+from ..llm.types import ContentPart, ReasoningDisplay
 from ..node import Node
 from ..registry import ModelRegistry
 from . import prompts
@@ -170,6 +171,9 @@ from .validation_repair import (
     _attempt_graceful_failure as _attempt_graceful_failure_impl,
 )
 from .validation_repair import (
+    _ensure_structured_final as _ensure_structured_final_impl,
+)
+from .validation_repair import (
     _extract_field_descriptions as _extract_field_descriptions_impl,
 )
 from .validation_repair import (
@@ -186,6 +190,7 @@ from .validation_repair import (
 )
 
 if TYPE_CHECKING:
+    from ..llm import ModelFallbackConfig
     from ..steering import SteeringInbox
     from .artifact_registry import ArtifactRegistry
     from .constraints import _CostTracker
@@ -246,109 +251,74 @@ class ReactPlanner:
     pause/resume for approvals, adaptive re-planning on failures, parallel
     execution, and trajectory compression for long-running sessions.
 
-    Thread Safety
-    -------------
-    NOT thread-safe. Create separate planner instances per task.
+    Thread Safety:
+        NOT thread-safe. Create separate planner instances per task.
 
-    Parameters
-    ----------
-    llm : str | Mapping[str, Any] | None
-        LiteLLM model name (e.g., "gpt-4") or config dict. Required if
-        llm_client is not provided.
-    nodes : Sequence[Node] | None
-        Sequence of PenguiFlow nodes to make available as tools. Either
-        (nodes + registry) or catalog must be provided.
-    catalog : Sequence[NodeSpec] | None
-        Pre-built tool catalog. If provided, nodes and registry are ignored.
-    registry : ModelRegistry | None
-        Model registry for type resolution. Required if nodes is provided.
-    llm_client : JSONLLMClient | None
-        Custom LLM client implementation. If provided, llm is ignored.
-    max_iters : int
-        Maximum planning iterations before returning no_path. Default: 8.
-    temperature : float
-        LLM sampling temperature. Default: 0.0 for deterministic output.
-    json_schema_mode : bool
-        Enable strict JSON schema enforcement via LLM response_format.
-        Default: True.
-    system_prompt_extra : str | None
-        Optional instructions for interpreting custom context (e.g., memory format).
-        Use this to specify how the planner should use structured data passed via
-        llm_context. The library provides baseline injection; this parameter lets
-        you define format-specific semantics.
+    Args:
+        llm: LiteLLM model name (e.g., "gpt-4") or config dict. Required if
+            llm_client is not provided.
+        nodes: Sequence of PenguiFlow nodes to make available as tools. Either
+            (nodes + registry) or catalog must be provided.
+        catalog: Pre-built tool catalog. If provided, nodes and registry are ignored.
+        registry: Model registry for type resolution. Required if nodes is provided.
+        llm_client: Custom LLM client implementation. If provided, llm is ignored.
+        max_iters: Maximum planning iterations before returning no_path. Default: 8.
+        temperature: LLM sampling temperature. Default: 0.0 for deterministic output.
+        json_schema_mode: Enable strict JSON schema enforcement via LLM response_format.
+            Default: True.
+        system_prompt_extra: Optional instructions for interpreting custom context (e.g., memory
+            format). Use this to specify how the planner should use structured data passed via
+            llm_context. The library provides baseline injection; this parameter lets you define
+            format-specific semantics. Examples:
 
-        Examples:
-        - "memories contains JSON with user preferences; respect them when planning"
-        - "context.knowledge is a flat list of facts; cite relevant ones"
-        - "Use context.history to avoid repeating failed approaches"
-    token_budget : int | None
-        If set, triggers trajectory summarization when history exceeds limit.
-        Token count is estimated by character length (approx).
-    pause_enabled : bool
-        Allow nodes to trigger pause/resume flow. Default: True.
-    state_store : StateStore | None
-        Optional durable state adapter for pause/resume persistence.
-    summarizer_llm : str | Mapping[str, Any] | None
-        Separate (cheaper) LLM for trajectory compression. Falls back to
-        main LLM if not set.
-    reflection_config : ReflectionConfig | None
-        Optional configuration enabling automatic answer critique before
-        finishing. Disabled by default.
-    reflection_llm : str | Mapping[str, Any] | None
-        Optional LiteLLM identifier used for critique when
-        ``reflection_config.use_separate_llm`` is ``True``.
-    planning_hints : Mapping[str, Any] | None
-        Structured constraints and preferences (ordering, disallowed nodes,
-        max_parallel, etc.). See plan.md for schema.
-    tool_policy : ToolPolicy | None
-        Optional runtime policy that filters the tool catalog (whitelists,
-        blacklists, or tag requirements) for multi-tenant and safety use cases.
-    repair_attempts : int
-        Max attempts to repair invalid JSON from LLM. Default: 3.
-    max_consecutive_arg_failures : int
-        Max consecutive tool arg validation failures before forcing a finish
-        with requires_followup=True. Helps small models avoid infinite loops
-        when they repeatedly produce invalid args. Default: 3.
-    arg_fill_enabled : bool
-        Enable arg-fill mode for missing tool arguments. When True, if a tool
-        call has valid tool selection but missing/invalid args, the planner
-        will make a simplified LLM call asking only for the missing values
-        instead of requiring a full JSON repair. This significantly improves
-        success rates for small models. Default: True.
-    deadline_s : float | None
-        Wall-clock deadline for planning session (seconds from start).
-    hop_budget : int | None
-        Maximum tool invocations allowed.
-    time_source : Callable[[], float] | None
-        Override time.monotonic for testing.
-    event_callback : PlannerEventCallback | None
-        Optional callback receiving PlannerEvent instances for observability.
-    llm_timeout_s : float
-        Per-LLM-call timeout in seconds. Default: 360.0.
-    llm_max_retries : int
-        Max retry attempts for transient LLM failures. Default: 3.
-    absolute_max_parallel : int
-        System-level safety limit on parallel execution regardless of hints.
-        Default: 50.
+            - "memories contains JSON with user preferences; respect them when planning"
+            - "context.knowledge is a flat list of facts; cite relevant ones"
+            - "Use context.history to avoid repeating failed approaches"
+        token_budget: If set, triggers trajectory summarization when history exceeds limit.
+            Token count is estimated by character length (approx).
+        pause_enabled: Allow nodes to trigger pause/resume flow. Default: True.
+        state_store: Optional durable state adapter for pause/resume persistence.
+        summarizer_llm: Separate (cheaper) LLM for trajectory compression. Falls back to
+            main LLM if not set.
+        reflection_config: Optional configuration enabling automatic answer critique before
+            finishing. Disabled by default.
+        reflection_llm: Optional LiteLLM identifier used for critique when
+            ``reflection_config.use_separate_llm`` is ``True``.
+        planning_hints: Structured constraints and preferences (ordering, disallowed nodes,
+            max_parallel, etc.). See plan.md for schema.
+        tool_policy: Optional runtime policy that filters the tool catalog (whitelists,
+            blacklists, or tag requirements) for multi-tenant and safety use cases.
+        repair_attempts: Max attempts to repair invalid JSON from LLM. Default: 3.
+        max_consecutive_arg_failures: Max consecutive tool arg validation failures before forcing
+            a finish with requires_followup=True. Helps small models avoid infinite loops when
+            they repeatedly produce invalid args. Default: 3.
+        arg_fill_enabled: Enable arg-fill mode for missing tool arguments. When True, if a tool
+            call has valid tool selection but missing/invalid args, the planner will make a
+            simplified LLM call asking only for the missing values instead of requiring a full
+            JSON repair. This significantly improves success rates for small models. Default: True.
+        deadline_s: Wall-clock deadline for planning session (seconds from start).
+        hop_budget: Maximum tool invocations allowed.
+        time_source: Override time.monotonic for testing.
+        event_callback: Optional callback receiving PlannerEvent instances for observability.
+        llm_timeout_s: Per-LLM-call timeout in seconds. Default: 360.0.
+        llm_max_retries: Max retry attempts for transient LLM failures. Default: 3.
+        absolute_max_parallel: System-level safety limit on parallel execution regardless of hints.
+            Default: 50.
 
-    Raises
-    ------
-    ValueError
-        If neither (nodes + registry) nor catalog is provided, or if neither
-        llm nor llm_client is provided.
-    RuntimeError
-        If LiteLLM is not installed and llm_client is not provided.
+    Raises:
+        ValueError: If neither (nodes + registry) nor catalog is provided, or if neither
+            llm nor llm_client is provided.
+        RuntimeError: If LiteLLM is not installed and llm_client is not provided.
 
-    Examples
-    --------
-    >>> planner = ReactPlanner(
-    ...     llm="gpt-4",
-    ...     nodes=[triage_node, retrieve_node, summarize_node],
-    ...     registry=my_registry,
-    ...     max_iters=10,
-    ... )
-    >>> result = await planner.run("Explain PenguiFlow's architecture")
-    >>> print(result.reason)  # "answer_complete", "no_path", or "budget_exhausted"
+    Example:
+        >>> planner = ReactPlanner(
+        ...     llm="gpt-4",
+        ...     nodes=[triage_node, retrieve_node, summarize_node],
+        ...     registry=my_registry,
+        ...     max_iters=10,
+        ... )
+        >>> result = await planner.run("Explain PenguiFlow's architecture")
+        >>> print(result.reason)  # "answer_complete", "no_path", or "budget_exhausted"
     """
 
     # Default system-level safety limit for parallel execution
@@ -393,6 +363,11 @@ class ReactPlanner:
     _specs: list[NodeSpec]
     _state_store: Any | None
     _stream_final_response: bool
+    _final_response_model: type[BaseModel] | None
+    _final_response_retries: int
+    _final_response_schema: dict[str, Any] | None
+    _tool_call_mode: str
+    _llm_transport: str | None
     _summarizer_client: JSONLLMClient | None
     _system_prompt: str
     _system_prompt_extra: str | None
@@ -422,6 +397,7 @@ class ReactPlanner:
     _auto_seq_read_only_only: bool
     _use_native_reasoning: bool
     _reasoning_effort: str | None
+    _reasoning_display: str | None
     _guardrail_gateway: GuardrailGateway | None
     _guardrail_context: GuardrailContext | None
     _guardrail_run_id: str | None
@@ -465,11 +441,17 @@ class ReactPlanner:
         llm_max_retries: int = 3,
         use_native_reasoning: bool = True,
         reasoning_effort: str | None = None,
+        reasoning_display: ReasoningDisplay = None,
+        llm_fallback: ModelFallbackConfig | None = None,
         absolute_max_parallel: int = 50,
         reflection_config: ReflectionConfig | None = None,
         reflection_llm: str | Mapping[str, Any] | None = None,
         tool_policy: ToolPolicy | None = None,
         stream_final_response: bool = False,
+        final_response_model: type[BaseModel] | None = None,
+        final_response_retries: int = 1,
+        tool_call_mode: str = "prompted",
+        llm_transport: str | None = None,
         short_term_memory: ShortTermMemory | ShortTermMemoryConfig | None = None,
         background_tasks: BackgroundTasksConfig | None = None,
         error_recovery: ErrorRecoveryConfig | None = None,
@@ -529,11 +511,17 @@ class ReactPlanner:
             "llm_max_retries": llm_max_retries,
             "use_native_reasoning": use_native_reasoning,
             "reasoning_effort": reasoning_effort,
+            "reasoning_display": reasoning_display,
+            "llm_fallback": llm_fallback,
             "absolute_max_parallel": absolute_max_parallel,
             "reflection_config": reflection_config,
             "reflection_llm": reflection_llm,
             "tool_policy": tool_policy,
             "stream_final_response": stream_final_response,
+            "final_response_model": final_response_model,
+            "final_response_retries": final_response_retries,
+            "tool_call_mode": tool_call_mode,
+            "llm_transport": llm_transport,
             "short_term_memory": short_term_memory,
             "background_tasks": background_tasks,
             "error_recovery": error_recovery,
@@ -582,11 +570,17 @@ class ReactPlanner:
             llm_max_retries=llm_max_retries,
             use_native_reasoning=use_native_reasoning,
             reasoning_effort=reasoning_effort,
+            reasoning_display=reasoning_display,
+            llm_fallback=llm_fallback,
             absolute_max_parallel=absolute_max_parallel,
             reflection_config=reflection_config,
             reflection_llm=reflection_llm,
             tool_policy=tool_policy,
             stream_final_response=stream_final_response,
+            final_response_model=final_response_model,
+            final_response_retries=final_response_retries,
+            tool_call_mode=tool_call_mode,
+            llm_transport=llm_transport,
             short_term_memory=short_term_memory,
             background_tasks=background_tasks,
             error_recovery=error_recovery,
@@ -621,6 +615,20 @@ class ReactPlanner:
 
         Background task orchestration requires a fresh ReactPlanner per task because
         the planner maintains mutable per-run state and is not thread-safe.
+
+        Args:
+            catalog_filter: Optional predicate applied to each NodeSpec to restrict which tools the
+                forked planner exposes.
+            tool_policy: Optional runtime policy applied to the forked planner. When
+                ``inherit_policy`` is True it is intersected/merged with the parent's policy.
+            inherit_policy: When True, merge ``tool_policy`` with the parent planner's policy
+                (intersecting allowed tools, unioning denied tools and required tags). When False,
+                ``tool_policy`` replaces the parent's policy outright. Default: True.
+            background_tasks: Background tasks configuration for the forked planner. Defaults to
+                ``"inherit"``, which reuses the parent's configuration.
+
+        Returns:
+            A new ReactPlanner instance sharing this planner's configuration.
         """
 
         init_kwargs = dict(self._init_kwargs or {})
@@ -730,6 +738,7 @@ class ReactPlanner:
         self,
         query: str,
         *,
+        input_parts: Sequence[ContentPart] | None = None,
         llm_context: Mapping[str, Any] | None = None,
         context_meta: Mapping[str, Any] | None = None,  # Deprecated
         tool_context: Mapping[str, Any] | None = None,
@@ -739,35 +748,28 @@ class ReactPlanner:
     ) -> PlannerFinish | PlannerPause:
         """Execute planner on a query until completion or pause.
 
-        Parameters
-        ----------
-        query : str
-            Natural language task description.
-        llm_context : Mapping[str, Any] | None
-            Optional context visible to LLM (memories, status_history, etc.).
-            Should NOT include internal metadata like tenant_id or trace_id.
-        context_meta : Mapping[str, Any] | None
-            **Deprecated**: Use llm_context instead. This parameter is kept for
-            backward compatibility but will be removed in a future version.
-        tool_context : Mapping[str, Any] | None
-            Tool-only context (callbacks, loggers, telemetry objects). Not
-            visible to the LLM. May contain non-serialisable objects.
-        memory_key : MemoryKey | None
-            Optional explicit short-term memory key. If omitted, the planner may
-            derive a key from `tool_context` using the configured memory isolation
-            paths. If no key is available and memory is configured to require an
-            explicit key, memory behaves as disabled for this call.
+        Args:
+            query: Natural language task description.
+            input_parts: Optional image/audio content parts appended to the initial user
+                message. Omitted by default to preserve text-only behavior.
+            llm_context: Optional context visible to LLM (memories, status_history, etc.).
+                Should NOT include internal metadata like tenant_id or trace_id.
+            context_meta: **Deprecated**: Use llm_context instead. This parameter is kept for
+                backward compatibility but will be removed in a future version.
+            tool_context: Tool-only context (callbacks, loggers, telemetry objects). Not
+                visible to the LLM. May contain non-serialisable objects.
+            memory_key: Optional explicit short-term memory key. If omitted, the planner may
+                derive a key from `tool_context` using the configured memory isolation paths. If no
+                key is available and memory is configured to require an explicit key, memory behaves
+                as disabled for this call.
+            steering: Optional steering inbox for injecting mid-run guidance into the planning loop.
+            tool_visibility: Optional policy restricting which tools are visible for this call.
 
-        Returns
-        -------
-        PlannerFinish | PlannerPause
-            PlannerFinish if task completed/failed, PlannerPause if paused
-            for human intervention.
+        Returns:
+            PlannerFinish if task completed/failed, PlannerPause if paused for human intervention.
 
-        Raises
-        ------
-        RuntimeError
-            If LLM client fails after all retries.
+        Raises:
+            RuntimeError: If LLM client fails after all retries.
         """
         session_id = None
         if self._session_dispatch_enabled:
@@ -781,6 +783,7 @@ class ReactPlanner:
                 async with session_lock:
                     return await session_planner.run(
                         query,
+                        input_parts=input_parts,
                         llm_context=llm_context,
                         context_meta=context_meta,
                         tool_context=tool_context,
@@ -799,6 +802,7 @@ class ReactPlanner:
                 return await _run_impl(
                     self,
                     query,
+                    input_parts=input_parts,
                     llm_context=llm_context,
                     context_meta=context_meta,
                     tool_context=tool_context,
@@ -820,32 +824,24 @@ class ReactPlanner:
     ) -> PlannerFinish | PlannerPause:
         """Resume a paused planning session.
 
-        Parameters
-        ----------
-        token : str
-            Resume token from a previous PlannerPause.
-        user_input : str | None
-            Optional user response to the pause (e.g., approval decision).
-        tool_context : Mapping[str, Any] | None
-            Tool-only context (callbacks, loggers, telemetry objects). Not
-            visible to the LLM. May contain non-serialisable objects. Overrides
-            any tool_context captured in the pause record.
-        memory_key : MemoryKey | None
-            Optional explicit short-term memory key for the resumed session. If
-            omitted, the planner may derive a key from `tool_context` using the
-            configured memory isolation paths. If no key is available and memory
-            is configured to require an explicit key, memory behaves as disabled
-            for this call.
+        Args:
+            token: Resume token from a previous PlannerPause.
+            user_input: Optional user response to the pause (e.g., approval decision).
+            tool_context: Tool-only context (callbacks, loggers, telemetry objects). Not
+                visible to the LLM. May contain non-serialisable objects. Overrides any
+                tool_context captured in the pause record.
+            memory_key: Optional explicit short-term memory key for the resumed session. If
+                omitted, the planner may derive a key from `tool_context` using the configured
+                memory isolation paths. If no key is available and memory is configured to require
+                an explicit key, memory behaves as disabled for this call.
+            steering: Optional steering inbox for injecting mid-run guidance into the planning loop.
+            tool_visibility: Optional policy restricting which tools are visible for this call.
 
-        Returns
-        -------
-        PlannerFinish | PlannerPause
+        Returns:
             Updated result after resuming execution.
 
-        Raises
-        ------
-        KeyError
-            If resume token is invalid or expired.
+        Raises:
+            KeyError: If resume token is invalid or expired.
         """
         session_id = None
         if self._session_dispatch_enabled:
@@ -1027,10 +1023,10 @@ class ReactPlanner:
     def _make_context(self, trajectory: Trajectory) -> _PlannerContext:
         return _PlannerContext(self, trajectory)
 
-    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, str]]:
+    async def _build_messages(self, trajectory: Trajectory) -> list[dict[str, Any]]:
         return await build_messages(self, trajectory)
 
-    def _estimate_size(self, messages: Sequence[Mapping[str, str]]) -> int:
+    def _estimate_size(self, messages: Sequence[Mapping[str, Any]]) -> int:
         return _estimate_size(messages)
 
     async def _summarise_trajectory(self, trajectory: Trajectory) -> TrajectorySummary:
@@ -1612,6 +1608,29 @@ class ReactPlanner:
             emit_event=self._emit_event,
             time_source=self._time_source,
             system_prompt_extra=self._system_prompt_extra,
+            action_seq=action_seq,
+        )
+
+    async def _ensure_structured_final(
+        self,
+        trajectory: Trajectory,
+        action: PlannerAction,
+        *,
+        action_seq: int,
+    ) -> None:
+        if self._final_response_model is None:
+            return
+        await _ensure_structured_final_impl(
+            trajectory=trajectory,
+            action=action,
+            final_response_model=self._final_response_model,
+            final_response_schema=self._final_response_schema or {},
+            retries=self._final_response_retries,
+            build_messages=self._build_messages,
+            client=self._client,
+            cost_tracker=self._cost_tracker,
+            emit_event=self._emit_event,
+            time_source=self._time_source,
             action_seq=action_seq,
         )
 

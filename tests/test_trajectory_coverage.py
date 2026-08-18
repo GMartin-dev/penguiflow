@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel
 
+from penguiflow.llm.types import ImagePart
 from penguiflow.planner.models import PlannerAction
 from penguiflow.planner.trajectory import (
     BackgroundTaskResult,
@@ -327,6 +328,25 @@ def test_trajectory_compress_with_observation():
 
     assert summary.last_output_digest is not None
     assert "result" in summary.last_output_digest
+
+
+def test_trajectory_input_parts_are_stubbed_in_serialise_and_summary():
+    """Multimodal inputs should preserve metadata without raw bytes."""
+    raw = b"\x89PNG\r\nraw-bytes"
+    trajectory = Trajectory(
+        query="describe",
+        input_parts=(ImagePart(data=raw, media_type="image/png", detail="high"),),
+    )
+
+    serialised = trajectory.serialise()
+    summary = trajectory.compress()
+
+    assert serialised["input_parts"] == [
+        {"type": "image", "media_type": "image/png", "bytes": len(raw), "detail": "high"}
+    ]
+    assert summary.facts["input_parts"] == serialised["input_parts"]
+    assert "raw-bytes" not in str(serialised)
+    assert "raw-bytes" not in str(summary.compact())
 
 
 def test_trajectory_compress_with_long_observation():
