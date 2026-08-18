@@ -77,6 +77,20 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `metric(gold, pred, **kwargs)`. Parameters bound positionally were also being filled into the keyword
   arguments for any metric declaring `**kwargs`. The all-`**kwargs` and explicit five-argument forms were
   unaffected.
+- The Playground `/eval/run` fallback now records the answer on `Trajectory.final_answer` as well as
+  `metadata["answer"]`. When the state store held no record for a prediction the endpoint synthesizes a
+  trajectory itself, and that one path disagreed with every planner-produced trajectory about where the
+  answer lives, so a metric reading `pred_trace["final_answer"]` saw `None` — and a later export of that
+  trace emitted `outputs.final: null` despite the answer being known.
+- `POST /eval/datasets/export` now returns HTTP 400 when the trace selector matches nothing, instead of
+  surfacing the underlying `ValueError` as an unhandled 500.
+- `GET /traces` now reports each trajectory's `finish_reason`, so the Playground trace list can
+  distinguish a run that answered from one that exhausted its budget — previously identical rows. The
+  field is omitted when unset. Run `status` is deliberately not exposed here: it needs flow history,
+  which this endpoint does not load.
+- The Playground UI trajectory store now retains `finish_reason` and `final_answer`. `setFromPayload`
+  enumerates fields explicitly, so both were dropped at the parse boundary even though the backend sent
+  them.
 - `MetricFn` now types metrics as returning a score **or an awaitable** of one, matching the runtime, which
   awaits metrics on every harness path. The signature had been restated in six places across `runner.py`,
   `api.py`, `sweep.py` and `workflow.py`, all declaring a synchronous return; it is now defined once in

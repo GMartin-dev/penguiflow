@@ -223,6 +223,7 @@ class TraceSummaryPayload(BaseModel):
     tags: list[str] = Field(default_factory=list)
     query_preview: str | None = None
     turn_index: int | None = None
+    finish_reason: str | None = None
 
 
 class TraceTagsRequest(BaseModel):
@@ -2320,6 +2321,7 @@ def create_playground_app(
 
             tags: list[str] = []
             query_preview: str | None = None
+            finish_reason: str | None = None
             if get_trajectory is not None:
                 trajectory = await get_trajectory(trace_id, session_id)
                 if trajectory is not None:
@@ -2327,6 +2329,7 @@ def create_playground_app(
                     if isinstance(tags_raw, list):
                         tags = sorted({str(tag).strip() for tag in tags_raw if str(tag).strip()})
                     query_preview = _query_preview(trajectory.query)
+                    finish_reason = getattr(trajectory, "finish_reason", None)
 
             payloads.append(
                 TraceSummaryPayload(
@@ -2335,6 +2338,7 @@ def create_playground_app(
                     tags=tags,
                     query_preview=query_preview,
                     turn_index=turn_index_by_key.get((trace_id, session_id)),
+                    finish_reason=finish_reason,
                 )
             )
         return payloads
@@ -2503,16 +2507,20 @@ def create_playground_app(
         output_dir = _auto_rename_output_dir(output_dir)
 
         selector = request.selector or EvalDatasetSelectorPayload()
-        export_result = await export_eval_dataset(
-            state_store=store,
-            output_dir=output_dir,
-            selector=EvalTraceSelector(
-                include_tags=tuple(selector.include_tags),
-                exclude_tags=tuple(selector.exclude_tags),
-                limit=selector.limit,
-            ),
-            redaction_profile=request.redaction_profile,
-        )
+        try:
+            export_result = await export_eval_dataset(
+                state_store=store,
+                output_dir=output_dir,
+                selector=EvalTraceSelector(
+                    include_tags=tuple(selector.include_tags),
+                    exclude_tags=tuple(selector.exclude_tags),
+                    limit=selector.limit,
+                ),
+                redaction_profile=request.redaction_profile,
+            )
+        except ValueError as exc:
+            # A selector that matches nothing is the caller's input, not a fault.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return EvalDatasetExportResponse(
             trace_count=int(export_result["trace_count"]),
             dataset_path=str(export_result["dataset_path"]),
@@ -2668,6 +2676,10 @@ def create_playground_app(
             if pred_record is None and save_trajectory is not None:
                 trajectory = Trajectory(query=question, llm_context=llm_context_dict, tool_context=tool_context_dict)
                 trajectory.metadata["answer"] = chat_result.answer
+                # Match where planner-produced trajectories report their answer, so a
+                # metric reading `pred_trace["final_answer"]` behaves the same whether
+                # the record came from the store or was synthesized here.
+                trajectory.final_answer = chat_result.answer
                 await save_trajectory(chat_result.trace_id, pred_session_id, trajectory)
                 pred_record = trajectory
             if pred_record is not None and hasattr(pred_record, "serialise"):

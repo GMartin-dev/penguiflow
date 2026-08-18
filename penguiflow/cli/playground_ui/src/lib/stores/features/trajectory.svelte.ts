@@ -39,6 +39,8 @@ export interface TrajectoryStore {
   readonly hasExternalMemory: boolean;
   readonly traceId: string | null;
   readonly sessionId: string | null;
+  readonly finishReason: string | null;
+  readonly finalAnswer: string | null;
   readonly evalCaseSelection: EvalCaseSelection | null;
   readonly evalComparison: EvalCaseComparisonResponse | null;
   readonly evalComparisonLoading: boolean;
@@ -64,6 +66,8 @@ export function createTrajectoryStore(): TrajectoryStore {
   let backgroundResults = $state<BackgroundResultsMap | null>(null);
   let traceId = $state<string | null>(null);
   let sessionId = $state<string | null>(null);
+  let finishReason = $state<string | null>(null);
+  let finalAnswer = $state<string | null>(null);
   let evalCaseSelection = $state<EvalCaseSelection | null>(null);
   let evalComparison = $state<EvalCaseComparisonResponse | null>(null);
   let evalComparisonLoading = $state(false);
@@ -79,6 +83,8 @@ export function createTrajectoryStore(): TrajectoryStore {
     get backgroundResults() { return backgroundResults; },
     get traceId() { return traceId; },
     get sessionId() { return sessionId; },
+    get finishReason() { return finishReason; },
+    get finalAnswer() { return finalAnswer; },
     get evalCaseSelection() { return evalCaseSelection; },
     get evalComparison() { return evalComparison; },
     get evalComparisonLoading() { return evalComparisonLoading; },
@@ -120,6 +126,8 @@ export function createTrajectoryStore(): TrajectoryStore {
       backgroundResults = payload?.background_results ?? null;
       traceId = payload?.trace_id ?? null;
       sessionId = payload?.session_id ?? null;
+      finishReason = payload?.finish_reason ?? null;
+      finalAnswer = payload?.final_answer ?? null;
     },
 
     setEvalCaseSelection(selection: EvalCaseSelection | null) {
@@ -166,6 +174,8 @@ export function createTrajectoryStore(): TrajectoryStore {
       backgroundResults = null;
       traceId = null;
       sessionId = null;
+      finishReason = null;
+      finalAnswer = null;
       evalCaseSelection = null;
       evalComparison = null;
       evalComparisonLoading = false;

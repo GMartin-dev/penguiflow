@@ -552,6 +552,27 @@ class TestTracesEndpoint:
             }
         ]
 
+    def test_list_traces_reports_finish_reason(self, tmp_path: Path) -> None:
+        """The trace list must distinguish a run that answered from one that gave up.
+
+        Without this the two are identical in the UI, since every other field on the
+        row is the same. Status is deliberately not surfaced here: it needs flow
+        history, which this endpoint does not load.
+        """
+
+        wrapper = MockAgentWrapper()
+        store = InMemoryStateStore()
+        exhausted = Trajectory(query="ran out of budget")
+        exhausted.finish_reason = "budget_exhausted"
+        asyncio.run(store.save_trajectory("trace-exhausted", "session-a", exhausted))
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, state_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/traces")
+        assert response.status_code == 200
+        assert response.json()[0]["finish_reason"] == "budget_exhausted"
+
     def test_list_traces_reads_tags_from_trajectory_metadata(self, tmp_path: Path) -> None:
         wrapper = MockAgentWrapper()
         store = InMemoryStateStore()
@@ -754,6 +775,30 @@ class TestEvalDatasetExportEndpoint:
         rows = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert len(rows) == 1
         assert rows[0]["example_id"] == "trace-selected"
+
+    def test_export_dataset_rejects_selector_matching_no_traces(self, tmp_path: Path) -> None:
+        """An empty selector is a bad request, not a server fault."""
+
+        wrapper = MockAgentWrapper()
+        store = InMemoryStateStore()
+
+        stored = Trajectory(query="selected-question")
+        stored.metadata["tags"] = ["dataset:alpha"]
+        asyncio.run(store.save_trajectory("trace-selected", "session-a", stored))
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, state_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/eval/datasets/export",
+            json={
+                "selector": {"include_tags": ["dataset:does-not-exist"]},
+                "output_dir": "playground_eval/dataset_empty",
+                "redaction_profile": "internal_safe",
+            },
+        )
+        assert response.status_code == 400
+        assert "no traces" in response.json()["detail"]
 
     def test_export_dataset_uses_default_agent_evals_path_when_output_dir_missing(self, tmp_path: Path) -> None:
         wrapper = MockAgentWrapper()
@@ -1187,6 +1232,42 @@ class TestEvalRunEndpoint:
         assert case["pred_session_id"].startswith("eval:")
         assert case["question"] == "what is policy"
         assert payload["passed_threshold"] is None
+
+    def test_eval_run_fallback_trajectory_records_final_answer(self, tmp_path: Path) -> None:
+        """The synthesized trajectory must carry the answer where metrics look for it.
+
+        When the store holds no record for the prediction, the endpoint builds a
+        trajectory itself. Every planner-produced trajectory now reports its answer
+        on ``final_answer``, so a metric reading ``pred_trace["final_answer"]`` would
+        otherwise see ``None`` on this path alone.
+        """
+
+        self._write_eval_metric(tmp_path)
+        self._write_dataset(tmp_path, ["what is policy"])
+
+        store = InMemoryStateStore()
+        wrapper = MockAgentWrapper(
+            chat_result=ChatResult(
+                trace_id="pred-trace-1",
+                session_id="ignored-by-endpoint",
+                answer="policy answer",
+                metadata={"steps": 1},
+                pause=None,
+            )
+        )
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, state_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/eval/run",
+            json={"dataset_path": "fixtures/dataset", "metric_spec": "eval_metric:score", "min_test_score": 0.5},
+        )
+        assert response.status_code == 200
+        pred_session_id = response.json()["cases"][0]["pred_session_id"]
+
+        stored = asyncio.run(store.get_trajectory("pred-trace-1", pred_session_id))
+        assert stored is not None
+        assert stored.final_answer == "policy answer"
 
     def test_eval_run_awaits_async_metric(self, tmp_path: Path) -> None:
         self._write_eval_metric_async(tmp_path)
