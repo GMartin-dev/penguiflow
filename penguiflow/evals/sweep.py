@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .runner import run_harness_eval
+from .runner import MetricFn, run_harness_eval
 
 
 def _mean_score_from_results(path: Path) -> float:
@@ -36,7 +36,7 @@ async def run_manual_sweep(
     dataset_path: str | Path,
     output_dir: str | Path,
     run_one: Callable[[dict[str, Any], dict[str, Any] | None], Any],
-    metric: Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]],
+    metric: MetricFn,
     candidates: list[dict[str, Any]],
     workload: str | None = None,
 ) -> dict[str, Any]:

@@ -7,7 +7,8 @@ import inspect
 import json
 import secrets
 import sys
-from collections.abc import Callable, Mapping, Sequence
+import warnings
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,8 +18,8 @@ from penguiflow.state import InMemoryStateStore
 
 from .export import collect_trace_rows
 from .inputs import load_query_suite
+from .runner import MetricFn, MetricScore
 
-MetricFn = Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]]
 RunOneFn = Callable[[dict[str, Any], dict[str, Any] | None], Any]
 
 
@@ -244,7 +245,7 @@ def wrap_metric(metric: Callable[..., Any]) -> MetricFn:
         trace: object | None = None,
         pred_name: str | None = None,
         pred_trace: object | None = None,
-    ) -> float | dict[str, object]:
+    ) -> MetricScore | Awaitable[MetricScore]:
         values: dict[str, object | None] = {
             "gold": gold,
             "pred": pred,
@@ -258,10 +259,12 @@ def wrap_metric(metric: Callable[..., Any]) -> MetricFn:
 
         positional: list[object | None] = []
         kwargs: dict[str, object | None] = {}
+        bound: set[str] = set()
         for param in params.values():
             if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                 if param.name in values:
                     positional.append(values[param.name])
+                    bound.add(param.name)
                     continue
                 if param.default is inspect.Parameter.empty:
                     raise TypeError(f"metric has unsupported required parameter {param.name!r}")
@@ -273,7 +276,12 @@ def wrap_metric(metric: Callable[..., Any]) -> MetricFn:
                     raise TypeError(f"metric has unsupported required parameter {param.name!r}")
 
         if has_var_kwargs:
+            # Skip anything already bound positionally: passing it again by name
+            # is a "got multiple values for argument" TypeError, which is what
+            # `metric(gold, pred, **kwargs)` used to hit.
             for key, value in values.items():
+                if key in bound:
+                    continue
                 kwargs.setdefault(key, value)
 
         raw = metric(*positional, **kwargs)
@@ -505,11 +513,32 @@ def _merge_tag_lists(existing: list[str], incoming: list[str]) -> list[str]:
     return merged
 
 
+def _warn_state_store_dropped(target_name: str) -> None:
+    """Warn that the eval state store could not be handed to the agent.
+
+    Not an error: a builder may construct its own store over the same backing
+    database, and persistence still works. ``collect_traces`` verifies after each
+    run that the trajectory actually landed, which is what catches the broken
+    cases without false positives here.
+    """
+
+    warnings.warn(
+        f"{target_name} does not accept a 'state_store' argument, so the eval state_store "
+        "was not injected. Traces will only be visible to the eval if the agent persists "
+        "to the same store on its own.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def _instantiate_orchestrator(target: type[Any], config: Any | None, *, state_store: Any | None = None) -> Any:
     signature = inspect.signature(target)
     kwargs: dict[str, Any] = {}
-    if state_store is not None and "state_store" in signature.parameters:
-        kwargs["state_store"] = state_store
+    if state_store is not None:
+        if "state_store" in signature.parameters:
+            kwargs["state_store"] = state_store
+        else:
+            _warn_state_store_dropped(target.__name__)
     params = [param for name, param in signature.parameters.items() if name != "self"]
     if not params:
         return target(**kwargs)
@@ -524,11 +553,13 @@ def _instantiate_orchestrator(target: type[Any], config: Any | None, *, state_st
 def _call_builder(builder: Callable[..., Any], config: Any | None, *, state_store: Any | None = None) -> Any:
     signature = inspect.signature(builder)
     kwargs: dict[str, Any] = {}
-    if state_store is not None and (
-        "state_store" in signature.parameters
-        or any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
-    ):
-        kwargs["state_store"] = state_store
+    if state_store is not None:
+        if "state_store" in signature.parameters or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+        ):
+            kwargs["state_store"] = state_store
+        else:
+            _warn_state_store_dropped(getattr(builder, "__name__", "build_planner"))
     params = list(signature.parameters.values())
     if not params:
         return builder(**kwargs)
@@ -912,6 +943,7 @@ async def collect_traces(
         )
         trace_ids.append(result.trace_id)
         wait_for_trace_persistence = getattr(runner, "wait_for_trace_persistence", None)
+        timed_out = False
         if callable(wait_for_trace_persistence):
             try:
                 await _maybe_await(
@@ -922,18 +954,36 @@ async def collect_traces(
                     )
                 )
             except TimeoutError:
-                pass
+                timed_out = True
+
+        # Read the trajectory back once and use it for both the wiring check and
+        # tagging. The waiter's return value cannot serve as the check: it is
+        # False both when persistence failed and when it already completed
+        # synchronously. The store read is the only ground truth.
+        #
+        # Fail on the first miss rather than accumulating a report -- this is a
+        # wiring error, and every remaining query would burn a run to fail the
+        # same way.
+        trajectory = None
+        if hasattr(state_store, "get_trajectory"):
+            trajectory = await _maybe_await(state_store.get_trajectory(result.trace_id, session_id))
+            if trajectory is None:
+                detail = "persistence timed out" if timed_out else "nothing was persisted"
+                raise RuntimeError(
+                    f"trace {result.trace_id!r} is missing from the eval state store after "
+                    f"running query {case.query!r} ({detail}). The agent's builder or "
+                    "orchestrator most likely does not accept the injected 'state_store', "
+                    "so the planner persisted elsewhere."
+                )
 
         tags = _collect_tags(case)
-        if tags and hasattr(state_store, "get_trajectory") and hasattr(state_store, "save_trajectory"):
-            trajectory = await state_store.get_trajectory(result.trace_id, session_id)
-            if trajectory is not None:
-                metadata = dict(trajectory.metadata or {})
-                existing_raw = metadata.get("tags", [])
-                existing = [str(tag) for tag in existing_raw] if isinstance(existing_raw, list) else []
-                metadata["tags"] = _merge_tag_lists(existing, tags)
-                trajectory.metadata = metadata
-                await state_store.save_trajectory(result.trace_id, session_id, trajectory)
+        if tags and trajectory is not None and hasattr(state_store, "save_trajectory"):
+            metadata = dict(trajectory.metadata or {})
+            existing_raw = metadata.get("tags", [])
+            existing = [str(tag) for tag in existing_raw] if isinstance(existing_raw, list) else []
+            metadata["tags"] = _merge_tag_lists(existing, tags)
+            trajectory.metadata = metadata
+            await state_store.save_trajectory(result.trace_id, session_id, trajectory)
 
     return {
         "trace_count": len(trace_ids),
@@ -1346,7 +1396,7 @@ async def _evaluate_rows_mean(
     rows: list[dict[str, Any]],
     *,
     run_one: Callable[[dict[str, Any], dict[str, Any] | None], Any],
-    metric: Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]],
+    metric: MetricFn,
     pred_name: str,
     patch_bundle: dict[str, Any] | None,
 ) -> float:
@@ -1370,7 +1420,7 @@ async def _evaluate_dataset_rows(
     val_rows: list[dict[str, Any]],
     test_rows: list[dict[str, Any]],
     run_one: Callable[[dict[str, Any], dict[str, Any] | None], Any],
-    metric: Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]],
+    metric: MetricFn,
     candidates: list[dict[str, Any]],
     workload: str | None,
     report_path: str | Path | None,
@@ -1508,7 +1558,7 @@ async def evaluate_dataset(
     *,
     dataset_path: str | Path,
     run_one: Callable[[dict[str, Any], dict[str, Any] | None], Any],
-    metric: Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]],
+    metric: MetricFn,
     candidates: list[dict[str, Any]],
     workload: str | None = None,
     report_path: str | Path | None = None,

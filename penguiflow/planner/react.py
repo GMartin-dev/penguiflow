@@ -220,6 +220,24 @@ class _GuardrailStreamHandler:
             await self._planner._emit_guardrailed_llm_stream_chunk(self._trajectory, payload)
 
 
+def _answer_from_payload(payload: Any) -> str | None:
+    """Answer text carried by a finish payload, or ``None``.
+
+    Mirrors ``PlannerAction.answer_text()`` precedence. Callers must only apply
+    this to payloads the planner built for a user-facing answer: several
+    termination paths pass a raw tool observation through as the payload, and
+    tool output commonly contains an ``answer`` key of its own.
+    """
+
+    if not isinstance(payload, Mapping):
+        return None
+    for key in ("answer", "raw_answer"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 class ReactPlanner:
     """JSON-only ReAct planner for autonomous multi-step workflows.
 
@@ -1649,6 +1667,7 @@ class ReactPlanner:
         constraints: _ConstraintTracker | None = None,
         error: str | None = None,
         metadata_extra: Mapping[str, Any] | None = None,
+        user_facing_answer: str | None = None,
     ) -> PlannerFinish:
         # Safely serialize contexts - they may contain non-JSON-serializable objects
         llm_context_safe: dict[str, Any] | None = None
@@ -1663,6 +1682,21 @@ class ReactPlanner:
                 tool_context_safe = json.loads(json.dumps(dict(trajectory.tool_context), ensure_ascii=False))
             except (TypeError, ValueError):
                 tool_context_safe = None
+
+        trajectory.finish_reason = reason
+
+        # Only an answer-complete finish carries a user-facing answer in its
+        # payload. The budget/deadline and iteration-limit paths pass the last
+        # raw tool observation through, so extracting from it would promote
+        # internal tool data to the run's answer. Terminations that deliberately
+        # produce a message for the user pass it as `user_facing_answer`, which
+        # tool data can never reach.
+        if user_facing_answer:
+            trajectory.final_answer = user_facing_answer
+        elif reason == "answer_complete":
+            trajectory.final_answer = _answer_from_payload(payload)
+        else:
+            trajectory.final_answer = None
 
         metadata: dict[str, Any] = {
             "reason": reason,

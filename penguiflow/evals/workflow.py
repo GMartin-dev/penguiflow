@@ -10,7 +10,7 @@ from typing import Any
 from .analyze import run_analyze_only
 from .export import export_trace_dataset
 from .inputs import load_query_suite, load_trace_ids
-from .runner import run_harness_eval
+from .runner import MetricFn, run_harness_eval
 from .sweep import run_manual_sweep
 
 
@@ -87,7 +87,7 @@ async def run_eval_workflow(
     trace_ids_path: str | Path,
     output_dir: str | Path,
     run_one: Callable[[dict[str, Any], dict[str, Any] | None], Any],
-    metric: Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]],
+    metric: MetricFn,
     candidates: list[dict[str, Any]],
     session_id: str | None = None,
     workload: str | None = None,

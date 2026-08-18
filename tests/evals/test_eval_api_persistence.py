@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 from typing import Any
 
 import pytest
 
 from penguiflow.evals.api import (
     _build_discovered_run_one,
+    _call_builder,
     _EvalOrchestratorWrapper,
     _EvalPlannerWrapper,
+    _instantiate_orchestrator,
     collect_traces,
 )
 from penguiflow.planner import PlannerFinish, Trajectory
@@ -183,6 +186,96 @@ async def test_collect_traces_waits_for_persistence_before_tagging(
     assert "existing" in tags
     assert "dataset:policy-v1" in tags
     assert "split:val" in tags
+
+
+@pytest.mark.asyncio
+async def test_collect_traces_raises_when_trajectory_never_reaches_injected_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run whose trajectory never lands in the eval store must not report success.
+
+    This is what an agent builder that cannot accept the injected ``state_store``
+    looks like from here: the planner persists somewhere else, so the store stays
+    empty while every query still costs a real run.
+    """
+
+    store = _StoreWithDelayedSave()
+
+    class _Runner:
+        async def chat(
+            self,
+            query: str,
+            *,
+            session_id: str,
+            llm_context: dict[str, Any] | None = None,
+            tool_context: dict[str, Any] | None = None,
+        ) -> Any:
+            del query, llm_context, tool_context
+            return type(
+                "_Result",
+                (),
+                {"answer": "ok", "trace_id": "trace-lost", "session_id": session_id, "metadata": {}},
+            )()
+
+        async def wait_for_trace_persistence(
+            self,
+            trace_id: str,
+            session_id: str,
+            *,
+            timeout_s: float = 1.0,
+        ) -> bool:
+            del trace_id, session_id, timeout_s
+            return False
+
+    async def _build_runner(*, project_root: str, state_store: Any, agent_package: str | None = None) -> Any:
+        del project_root, state_store, agent_package
+        return _Runner()
+
+    monkeypatch.setattr("penguiflow.evals.api._build_project_runner", _build_runner)
+
+    with pytest.raises(RuntimeError, match="trace-lost"):
+        await collect_traces(
+            project_root=".",
+            state_store=store,
+            session_id="eval-collect-session",
+            queries=[{"query": "collect one", "split": "val"}],
+        )
+
+
+def test_call_builder_warns_when_state_store_cannot_be_injected() -> None:
+    """Dropping the injected store is worth a warning before any query runs.
+
+    It is only a warning: a builder may legitimately construct its own store over
+    the same backing DB, in which case persistence still works. The post-run
+    check in ``collect_traces`` is what catches the genuinely broken wiring.
+    """
+
+    def build_planner(config: Any) -> str:
+        del config
+        return "planner"
+
+    with pytest.warns(UserWarning, match="state_store"):
+        assert _call_builder(build_planner, object(), state_store=object()) == "planner"
+
+
+def test_instantiate_orchestrator_warns_when_state_store_cannot_be_injected() -> None:
+    class _Orchestrator:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+    with pytest.warns(UserWarning, match="state_store"):
+        _instantiate_orchestrator(_Orchestrator, object(), state_store=object())
+
+
+def test_call_builder_does_not_warn_when_state_store_is_accepted() -> None:
+    def build_planner(config: Any, *, state_store: Any = None) -> Any:
+        del config
+        return state_store
+
+    store = object()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _call_builder(build_planner, object(), state_store=store) is store
 
 
 @pytest.mark.asyncio

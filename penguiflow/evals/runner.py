@@ -6,11 +6,17 @@ import hashlib
 import inspect
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-MetricFn = Callable[[object, object, object | None, str | None, object | None], float | dict[str, object]]
+MetricScore = float | dict[str, object]
+# Metrics may be sync or async: every harness path awaits the result, so an
+# async metric (e.g. one built on the async `llm_judge` helper) is supported.
+MetricFn = Callable[
+    [object, object, object | None, str | None, object | None],
+    MetricScore | Awaitable[MetricScore],
+]
 RunOneFn = Callable[[dict[str, Any], dict[str, Any] | None], Any]
 DEFAULT_CONTEXT_IGNORE_KEYS: tuple[str, ...] = ("trace_id", "session_id", "__pf_patch_bundle")
 
@@ -139,7 +145,7 @@ async def run_harness_eval(
         if isinstance(run_output, tuple) and len(run_output) == 2:
             pred, pred_trace = run_output
 
-        metric_raw = metric(gold, pred, gold, pred_name, pred_trace)
+        metric_raw = await _maybe_await(metric(gold, pred, gold, pred_name, pred_trace))
         score, feedback = _as_score_payload(metric_raw)
         context_match = _context_match(gold, pred_trace, ignore_keys)
         if context_match is not None:

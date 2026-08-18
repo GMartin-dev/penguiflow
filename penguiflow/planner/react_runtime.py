@@ -2283,13 +2283,15 @@ async def run_loop(
                         stop_info = guardrail_payload.get("stop")
                         if isinstance(stop_info, Mapping):
                             stop_message = stop_info.get("user_message")
+                        stop_answer = stop_message or "Unable to complete the request."
                         return planner._finish(
                             trajectory,
                             reason="no_path",
                             payload={
-                                "raw_answer": stop_message or "Unable to complete the request.",
+                                "raw_answer": stop_answer,
                                 "guardrail": dict(guardrail_payload),
                             },
+                            user_facing_answer=stop_answer,
                             thought=str(guardrail_payload.get("reason") or "guardrail_stop"),
                             constraints=tracker,
                             error=outcome.error,

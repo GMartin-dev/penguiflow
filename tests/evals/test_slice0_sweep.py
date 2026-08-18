@@ -104,3 +104,42 @@ async def test_run_manual_sweep_accepts_baseline_only_mode(tmp_path) -> None:
     report = json.loads((tmp_path / "report.candidates.json").read_text(encoding="utf-8"))
     assert report["candidates"] == []
     assert report["winner"]["id"] == "baseline"
+
+
+@pytest.mark.asyncio
+async def test_run_manual_sweep_supports_async_metrics(tmp_path) -> None:
+    """The sweep path must score async metrics, not silently zero them.
+
+    `run_manual_sweep` delegates to the harness, which awaits the metric. This
+    guards the public contract for metrics built on the async `llm_judge`.
+    """
+    dataset_path = tmp_path / "view.jsonl"
+    dataset_path.write_text(
+        json.dumps({"example_id": "e1", "split": "val", "answer": "A"}) + "\n",
+        encoding="utf-8",
+    )
+
+    async def run_one(gold: dict[str, object], patch_bundle: dict[str, object] | None = None) -> str:
+        del patch_bundle
+        return str(gold["answer"])
+
+    async def async_metric(
+        gold: object,
+        pred: object,
+        trace: object | None = None,
+        pred_name: str | None = None,
+        pred_trace: object | None = None,
+    ) -> dict[str, object]:
+        del trace, pred_name, pred_trace
+        return {"score": 1.0 if isinstance(gold, dict) and pred == gold.get("answer") else 0.0}
+
+    result = await run_manual_sweep(
+        dataset_path=dataset_path,
+        output_dir=tmp_path,
+        run_one=run_one,
+        metric=async_metric,
+        candidates=[],
+        workload="demo_workload",
+    )
+
+    assert result["baseline_score"] == pytest.approx(1.0)

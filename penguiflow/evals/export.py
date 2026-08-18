@@ -10,9 +10,13 @@ from typing import Any
 from penguiflow.planner import PlannerEvent, Trajectory
 
 
-def _infer_status_from_history(history: list[Any]) -> str:
+def _history_has_failure(history: list[Any]) -> bool:
     kinds = {getattr(item, "kind", "") for item in history}
-    if {"node_error", "node_failed", "error", "node_timeout"} & kinds:
+    return bool({"node_error", "node_failed", "error", "node_timeout"} & kinds)
+
+
+def _infer_status_from_history(history: list[Any]) -> str:
+    if _history_has_failure(history):
         return "error"
     if history:
         return "ok"
@@ -42,12 +46,45 @@ def _planner_event_payloads(events: list[PlannerEvent]) -> list[dict[str, Any]]:
 
 
 def _infer_status(*, trajectory: Trajectory | None, history: list[Any]) -> str:
+    # Flow events and trajectory steps are independent failure signals, so a
+    # failure recorded in either one decides the status. Checking the trajectory
+    # first would let a node_error/node_timeout be masked by clean steps.
+    if _history_has_failure(history):
+        return "error"
     if trajectory is not None:
         for step in trajectory.steps:
             if step.error:
                 return "error"
+        # A run can end without answering while every step succeeded -- an
+        # exhausted deadline, hop budget or iteration limit. Step errors alone
+        # would report those as successes. Traces recorded before the planner
+        # tracked a reason have none, and keep the previous behaviour.
+        reason = getattr(trajectory, "finish_reason", None)
+        if reason is not None and reason != "answer_complete":
+            return "error"
         return "ok"
     return _infer_status_from_history(history)
+
+
+def _infer_final(trajectory: Trajectory | None) -> str | None:
+    """Answer text the trajectory ended with, or ``None``.
+
+    Prefers the answer the planner recorded at finish, since the ordinary answer
+    path never appends a terminal step. Falls back to scanning for a terminal
+    step, which is what serves reflection runs and imported legacy traces; that
+    scan runs in reverse so revision steps yield the final answer, not an
+    earlier one.
+    """
+
+    if trajectory is None:
+        return None
+    recorded = getattr(trajectory, "final_answer", None)
+    if isinstance(recorded, str) and recorded:
+        return recorded
+    for step in reversed(trajectory.steps):
+        if step.action.is_terminal():
+            return step.action.answer_text()
+    return None
 
 
 def _build_trace_example(
@@ -81,7 +118,7 @@ def _build_trace_example(
         },
         "outputs": {
             "status": _infer_status(trajectory=trajectory, history=history),
-            "final": None,
+            "final": _infer_final(trajectory),
             "error": None,
         },
         "trajectory": {
@@ -90,6 +127,7 @@ def _build_trace_example(
             "summary": trajectory.summary.model_dump(mode="json") if trajectory and trajectory.summary else None,
             "tags": tags,
             "split": _infer_split_from_tags(tags),
+            "finish_reason": getattr(trajectory, "finish_reason", None) if trajectory is not None else None,
         },
         "trajectory_full": trajectory_full,
         "events": {
@@ -109,6 +147,7 @@ def _build_trace_example(
             "fields_included": [
                 "trace_id",
                 "outputs.status",
+                "outputs.final",
                 "events.flow_events",
                 "inputs.llm_context",
                 "inputs.tool_context",
@@ -116,6 +155,7 @@ def _build_trace_example(
                 "trajectory.summary",
                 "trajectory.tags",
                 "trajectory.split",
+                "trajectory.finish_reason",
                 "trajectory.steps",
                 "trajectory_full",
             ],
