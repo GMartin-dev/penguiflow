@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+from pydantic import BaseModel
+
 from penguiflow.evals.helpers import (
+    _JudgeResult,
     extract_node_sequence,
     extract_step_args,
     extract_step_subset,
@@ -12,8 +16,6 @@ from penguiflow.evals.helpers import (
     step_args_match,
     trajectory_subset_match,
 )
-
-import pytest
 
 
 def test_extract_node_sequence_reads_planner_next_nodes() -> None:
@@ -361,7 +363,9 @@ async def test_llm_judge_uses_prebuilt_client() -> None:
             calls["messages"] = messages
             calls["response_model"] = response_model
             calls["kwargs"] = kwargs
-            return SimpleNamespace(data=SimpleNamespace(score=0.75, feedback="looks good"))
+            # The real client validates against the response_model it is given,
+            # so the stub returns that model rather than a duck-typed stand-in.
+            return SimpleNamespace(data=_JudgeResult(score=0.75, feedback="looks good"))
 
     result = await llm_judge(
         prompt="Judge the answer",
@@ -394,7 +398,7 @@ async def test_llm_judge_builds_client_from_model(monkeypatch: pytest.MonkeyPatc
             seen["messages"] = messages
             seen["response_model"] = response_model
             seen["kwargs"] = kwargs
-            return SimpleNamespace(data=SimpleNamespace(score=1.0, feedback=None))
+            return SimpleNamespace(data=_JudgeResult(score=1.0, feedback=None))
 
     monkeypatch.setattr("penguiflow.evals.helpers.LLMClient", _Client)
 
@@ -415,6 +419,27 @@ async def test_llm_judge_requires_exactly_one_of_client_or_model() -> None:
 
     with pytest.raises(ValueError, match="exactly one"):
         await llm_judge(prompt="Judge", outputs={"answer": "ok"}, client=object(), model="gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_rejects_unexpected_response_shape() -> None:
+    """A response that is not the judge schema must fail with a clear message.
+
+    The score and feedback come straight from model output, so this is a trust
+    boundary; reading attributes off whatever arrived would surface as an
+    AttributeError deep in a metric run.
+    """
+
+    class _Other(BaseModel):
+        verdict: str
+
+    class _Client:
+        async def generate(self, messages, response_model, **kwargs):
+            del messages, response_model, kwargs
+            return SimpleNamespace(data=_Other(verdict="great"))
+
+    with pytest.raises(RuntimeError, match="unexpected response shape"):
+        await llm_judge(prompt="Judge", outputs={"answer": "ok"}, client=_Client())
 
 
 @pytest.mark.asyncio

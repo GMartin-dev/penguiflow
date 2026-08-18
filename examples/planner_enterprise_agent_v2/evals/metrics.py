@@ -162,9 +162,11 @@ async def satisfaction_metric(
         prompt=(
             "You are grading answer helpfulness for an enterprise support agent. "
             "Score from 0.0 to 1.0 using this rubric: 1.0 = directly solves or clearly advances the user's request; "
-            "0.7 = mostly helpful but missing an important detail or action; 0.4 = somewhat relevant but vague, incomplete, "
-            "or weakly actionable; 0.0 = off-topic, misleading, or empty. Prefer lower scores when the answer is generic, "
-            "does not address the specific request, or lacks actionable guidance. Return brief feedback explaining the main reason."
+            "0.7 = mostly helpful but missing an important detail or action; "
+            "0.4 = somewhat relevant but vague, incomplete, or weakly actionable; "
+            "0.0 = off-topic, misleading, or empty. Prefer lower scores when the answer is generic, "
+            "does not address the specific request, or lacks actionable guidance. "
+            "Return brief feedback explaining the main reason."
         ),
         inputs={"question": question},
         outputs={"answer": answer},

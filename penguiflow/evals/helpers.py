@@ -6,13 +6,15 @@ and that parsing should not be rebuilt in every project example.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Mapping
-import json
 
 from pydantic import BaseModel
 
 from penguiflow.llm import LLMClient, LLMMessage, TextPart
+
+_ONE_OF_CLIENT_OR_MODEL = "llm_judge requires exactly one of client or model"
 
 
 class _JudgeResult(BaseModel):
@@ -222,10 +224,17 @@ async def llm_judge(
     """
 
     del use_reasoning
-    if (client is None) == (model is None):
-        raise ValueError("llm_judge requires exactly one of client or model")
+    # Spelled out rather than as an XOR so the type checker can narrow `model`
+    # to `str` on the branch that constructs a client from it.
+    if client is not None:
+        if model is not None:
+            raise ValueError(_ONE_OF_CLIENT_OR_MODEL)
+        judge_client = client
+    elif model is None:
+        raise ValueError(_ONE_OF_CLIENT_OR_MODEL)
+    else:
+        judge_client = LLMClient(model)
 
-    judge_client = client or LLMClient(model)
     sections = [prompt.strip()]
     if inputs is not None:
         sections.append(_format_judge_payload("inputs", inputs))
@@ -239,4 +248,8 @@ async def llm_judge(
         result = await judge_client.generate([message], _JudgeResult, temperature=temperature)
     except Exception as exc:
         raise RuntimeError(f"llm_judge failed: {exc}") from exc
-    return {"score": result.data.score, "feedback": result.data.feedback}
+    # Raised outside the try above so it is not re-wrapped as "llm_judge failed".
+    data = result.data
+    if not isinstance(data, _JudgeResult):
+        raise RuntimeError(f"llm_judge received an unexpected response shape: {type(data).__name__}")
+    return {"score": data.score, "feedback": data.feedback}
