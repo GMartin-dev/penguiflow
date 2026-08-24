@@ -161,7 +161,9 @@ The demo spec lives at `examples/planner_enterprise_agent_v2/evals/fail_metric_d
 Before freezing the baseline gate, it is often useful to review the dataset and metric in Playground:
 
 ```bash
-uv run penguiflow dev --project-root examples/planner_enterprise_agent_v2
+uv run penguiflow dev \
+  --project-root . \
+  --agent-package examples.planner_enterprise_agent_v2
 ```
 
 Useful loop:

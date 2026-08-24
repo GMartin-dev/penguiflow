@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from ag_ui.core import RunAgentInput
 from fastapi.testclient import TestClient
 
@@ -171,6 +174,54 @@ class TestUIMetaEndpoint:
         assert "planner" in data
         assert "services" in data
         assert "tools" in data
+
+    def test_ui_meta_enriches_lazy_planner_after_initialization(self, tmp_path: Path) -> None:
+        class LazyPlannerWrapper(MockAgentWrapper):
+            async def initialize(self) -> None:
+                await super().initialize()
+                self._planner = SimpleNamespace(
+                    _execution_specs=[],
+                    _max_iters=7,
+                    _hop_budget=3,
+                    _absolute_max_parallel=2,
+                )
+
+        app = create_playground_app(project_root=tmp_path, agent=LazyPlannerWrapper())
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.get("/ui/meta")
+
+        assert response.status_code == 200
+        assert response.json()["planner"]["max_iters"] == 7
+
+    def test_ui_meta_uses_runtime_agent_name_and_reflection(self, tmp_path: Path) -> None:
+        class RuntimeOrchestrator:
+            def __init__(self) -> None:
+                self.config = SimpleNamespace(agent_name="configured_agent")
+                self._planner = SimpleNamespace(
+                    _execution_specs=[],
+                    _reflection_config=SimpleNamespace(enabled=True),
+                )
+
+        wrapper = MockAgentWrapper()
+        wrapper._orchestrator = RuntimeOrchestrator()
+        app = create_playground_app(project_root=tmp_path, agent=wrapper)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            data = client.get("/ui/meta").json()
+
+        assert data["agent"]["name"] == "configured_agent"
+        assert data["planner"]["reflection"] is True
+
+    def test_ui_meta_enriches_planner_when_initialization_fails(self, tmp_path: Path) -> None:
+        class PartiallyInitializedWrapper(MockAgentWrapper):
+            async def initialize(self) -> None:
+                self._planner = SimpleNamespace(_execution_specs=[], _max_iters=9)
+                raise RuntimeError("initialization failed")
+
+        app = create_playground_app(project_root=tmp_path, agent=PartiallyInitializedWrapper())
+        with TestClient(app, raise_server_exceptions=False) as client:
+            data = client.get("/ui/meta").json()
+
+        assert data["planner"]["max_iters"] == 9
 
 
 class TestUIComponentsEndpoint:
@@ -902,6 +953,53 @@ class TestEvalDatasetExportEndpoint:
         assert dataset_path.parent == tmp_path / "src" / "example_app" / "evals" / "playground_export" / "dataset"
         assert dataset_path.exists()
 
+    def test_export_dataset_default_dir_uses_dotted_agent_package(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        store = InMemoryStateStore()
+        selected = Trajectory(query="selected-question")
+        selected.metadata["tags"] = ["dataset:alpha", "split:test"]
+        asyncio.run(store.save_trajectory("trace-selected", "session-a", selected))
+
+        app = create_playground_app(
+            project_root=tmp_path,
+            agent=wrapper,
+            state_store=store,
+            agent_package="company.example_app",
+        )
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/eval/datasets/export",
+            json={"selector": {"include_tags": ["dataset:alpha"]}},
+        )
+
+        assert response.status_code == 200
+        dataset_path = Path(response.json()["dataset_path"])
+        assert dataset_path.parent == tmp_path / "company" / "example_app" / "evals" / "playground_export" / "dataset"
+
+    def test_export_dataset_uses_flat_package_when_unrelated_src_exists(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        store = InMemoryStateStore()
+        (tmp_path / "example_app").mkdir()
+        (tmp_path / "src" / "other_package").mkdir(parents=True)
+        selected = Trajectory(query="selected-question")
+        selected.metadata["tags"] = ["dataset:alpha", "split:test"]
+        asyncio.run(store.save_trajectory("trace-selected", "session-a", selected))
+
+        app = create_playground_app(
+            project_root=tmp_path,
+            agent=wrapper,
+            state_store=store,
+            agent_package="example_app",
+        )
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/eval/datasets/export",
+            json={"selector": {"include_tags": ["dataset:alpha"]}},
+        )
+
+        assert response.status_code == 200
+        assert Path(response.json()["dataset_path"]).parent == (
+            tmp_path / "example_app" / "evals" / "playground_export" / "dataset"
+        )
+
 
 class TestEvalDatasetLoadEndpoint:
     """Tests for /eval/datasets/load endpoint."""
@@ -1002,6 +1100,109 @@ class TestEvalDatasetBrowseEndpoint:
                 "is_default": True,
             }
         ]
+
+    def test_browse_does_not_default_to_playground_exports(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        app_root = tmp_path / "example_app"
+        canonical_dir = app_root / "evals" / "policy"
+        export_dir = app_root / "evals" / "playground_export" / "dataset"
+        canonical_dir.mkdir(parents=True, exist_ok=True)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        (canonical_dir / "dataset.jsonl").write_text("{}\n", encoding="utf-8")
+        (export_dir / "dataset.jsonl").write_text("{}\n", encoding="utf-8")
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, agent_package="example_app")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/eval/datasets/browse")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "path": "example_app/evals/playground_export/dataset/dataset.jsonl",
+                "label": "playground_export/dataset/dataset.jsonl",
+                "is_default": False,
+            },
+            {
+                "path": "example_app/evals/policy/dataset.jsonl",
+                "label": "policy/dataset.jsonl",
+                "is_default": True,
+            },
+        ]
+
+    def test_browse_prefers_runnable_export_over_invalid_canonical_dataset(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        app_root = tmp_path / "example_app"
+        canonical = app_root / "evals" / "policy" / "dataset.jsonl"
+        exported = app_root / "evals" / "playground_export" / "dataset" / "dataset.jsonl"
+        canonical.parent.mkdir(parents=True)
+        exported.parent.mkdir(parents=True)
+        canonical.write_text('{"split":"unknown"}\n', encoding="utf-8")
+        exported.write_text('{"split":"val"}\n', encoding="utf-8")
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, agent_package="example_app")
+        response = TestClient(app, raise_server_exceptions=False).get("/eval/datasets/browse")
+
+        defaults = [entry["path"] for entry in response.json() if entry["is_default"]]
+        assert defaults == ["example_app/evals/playground_export/dataset/dataset.jsonl"]
+
+    def test_browse_prefers_dataset_referenced_by_evaluate_spec(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        evals = tmp_path / "example_app" / "evals"
+        canonical = evals / "policy" / "dataset.jsonl"
+        exported = evals / "playground_export" / "dataset" / "dataset.jsonl"
+        canonical.parent.mkdir(parents=True)
+        exported.parent.mkdir(parents=True)
+        canonical.write_text('{"split":"unknown"}\n', encoding="utf-8")
+        exported.write_text('{"split":"val"}\n', encoding="utf-8")
+        (evals / "policy" / "evaluate.spec.json").write_text(
+            json.dumps({"dataset_path": "example_app/evals/policy/dataset.jsonl"}),
+            encoding="utf-8",
+        )
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, agent_package="example_app")
+        response = TestClient(app, raise_server_exceptions=False).get("/eval/datasets/browse")
+
+        defaults = [entry["path"] for entry in response.json() if entry["is_default"]]
+        assert defaults == ["example_app/evals/policy/dataset.jsonl"]
+
+    def test_browse_excludes_dataset_symlinked_outside_project(self, tmp_path: Path) -> None:
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlinks are not supported")
+        wrapper = MockAgentWrapper()
+        outside = tmp_path.parent / "outside-dataset.jsonl"
+        outside.write_text('{"split":"val"}\n', encoding="utf-8")
+        evals = tmp_path / "example_app" / "evals"
+        evals.mkdir(parents=True)
+        (evals / "outside.jsonl").symlink_to(outside)
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, agent_package="example_app")
+        response = TestClient(app, raise_server_exceptions=False).get("/eval/datasets/browse")
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_browse_uses_first_sorted_evaluate_spec_dataset(self, tmp_path: Path) -> None:
+        wrapper = MockAgentWrapper()
+        evals = tmp_path / "example_app" / "evals"
+        alpha = evals / "alpha" / "dataset.jsonl"
+        beta = evals / "beta" / "dataset.jsonl"
+        alpha.parent.mkdir(parents=True)
+        beta.parent.mkdir(parents=True)
+        alpha.write_text('{"split":"unknown"}\n', encoding="utf-8")
+        beta.write_text('{"split":"val"}\n', encoding="utf-8")
+        (alpha.parent / "evaluate.spec.json").write_text(
+            json.dumps({"dataset_path": "example_app/evals/alpha/dataset.jsonl"}), encoding="utf-8"
+        )
+        (beta.parent / "evaluate.spec.json").write_text(
+            json.dumps({"dataset_path": "example_app/evals/beta/dataset.jsonl"}), encoding="utf-8"
+        )
+
+        app = create_playground_app(project_root=tmp_path, agent=wrapper, agent_package="example_app")
+        response = TestClient(app, raise_server_exceptions=False).get("/eval/datasets/browse")
+
+        defaults = [entry["path"] for entry in response.json() if entry["is_default"]]
+        assert defaults == ["example_app/evals/alpha/dataset.jsonl"]
 
 
 class TestEvalMetricBrowseEndpoint:

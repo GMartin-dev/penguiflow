@@ -233,7 +233,7 @@ All configuration is driven by environment variables (see `.env.example`):
 The `AgentConfig` dataclass provides type-safe configuration:
 
 ```python
-from examples.planner_enterprise_agent.config import AgentConfig
+from examples.planner_enterprise_agent_v2.config import AgentConfig
 
 # Load from environment
 config = AgentConfig.from_env()
@@ -255,8 +255,8 @@ config = AgentConfig(
 
 ```python
 import asyncio
-from examples.planner_enterprise_agent.main import EnterpriseAgentOrchestrator
-from examples.planner_enterprise_agent.config import AgentConfig
+from examples.planner_enterprise_agent_v2.main import EnterpriseAgentOrchestrator
+from examples.planner_enterprise_agent_v2.config import AgentConfig
 
 async def main():
     config = AgentConfig.from_env()
@@ -806,9 +806,9 @@ async def parse_doc(args: Args, ctx: Any) -> Result:
 
 ```python
 import pytest
-from examples.planner_enterprise_agent.main import EnterpriseAgentOrchestrator
-from examples.planner_enterprise_agent.config import AgentConfig
-from examples.planner_enterprise_agent.telemetry import AgentTelemetry
+from examples.planner_enterprise_agent_v2.main import EnterpriseAgentOrchestrator
+from examples.planner_enterprise_agent_v2.config import AgentConfig
+from examples.planner_enterprise_agent_v2.telemetry import AgentTelemetry
 
 @pytest.mark.asyncio
 async def test_document_workflow():

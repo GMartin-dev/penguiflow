@@ -59,7 +59,7 @@ In `Eval` / `Trajectory`:
 
 Export defaults in Playground:
 
-- with `agent_package`: `<project_root>/src/<agent_package>/evals/playground_export/dataset` when `src/` exists, otherwise `<project_root>/<agent_package>/evals/playground_export/dataset`
+  - with `agent_package`: `<project_root>/src/<agent_package>/evals/playground_export/dataset` when that package exists below `src/`, otherwise `<project_root>/<agent_package>/evals/playground_export/dataset`
 - without `agent_package`: `<project_root>/evals/playground_export/dataset`
 - existing targets are auto-renamed (`dataset-2`, `dataset-3`, ...) instead of overwritten
 

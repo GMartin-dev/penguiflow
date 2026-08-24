@@ -129,7 +129,9 @@ Use `examples/planner_enterprise_agent_v2` for MVP architecture validation.
 Execution modes:
 
 ```bash
-uv run penguiflow dev --project-root examples/planner_enterprise_agent_v2
+uv run penguiflow dev \
+  --project-root . \
+  --agent-package examples.planner_enterprise_agent_v2
 uv run python -m examples.planner_enterprise_agent_v2.main --query "Analyze the latest deployment logs"
 ```
 

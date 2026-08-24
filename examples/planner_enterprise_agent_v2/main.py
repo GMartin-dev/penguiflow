@@ -622,8 +622,8 @@ def _format_status_for_terminal(update: StatusUpdate, trace_id: str) -> str:
     if update.message:
         parts.append(f"{update.message}")
 
-    if update.roadmap_step_id is None and update.roadmap_step_list:
-        parts.append(f"Roadmap: {len(update.roadmap_step_list)} steps")
+    if update.roadmap_step_id is None and update.roadmap:
+        parts.append(f"Roadmap: {len(update.roadmap)} steps")
 
     return " ".join(parts)
 
@@ -717,7 +717,7 @@ Examples:
 
     # Example: Passing memories for context-aware planning
     # In production, these would come from a conversation database
-    example_memories = [
+    example_memories: list[dict[str, Any]] = [
         {
             "role": "user",
             "content": "Deploy version 2.3.1 to production",

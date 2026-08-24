@@ -989,17 +989,78 @@ def create_playground_app(
     sticky_tool_nodes: dict[str, dict[str, Any]] = {}
     ui_dir = Path(__file__).resolve().parent / "playground_ui" / "dist"
     resolved_project_root = Path(project_root or ".").resolve()
-    resolved_agent_base = (
-        (resolved_project_root / "src") if (resolved_project_root / "src").exists() else resolved_project_root
-    )
+
+    def _agent_evals_root() -> Path | None:
+        if not agent_package:
+            return None
+        package_dir = Path(*agent_package.split("."))
+        if (resolved_project_root / "__init__.py").is_file() and resolved_project_root.name == package_dir.name:
+            return (resolved_project_root / "evals").resolve()
+        src_package = resolved_project_root / "src" / package_dir
+        package_root = src_package if src_package.is_dir() else resolved_project_root / package_dir
+        return (package_root / "evals").resolve()
 
     def _resolve_evals_root() -> Path:
-        if agent_package:
-            return (resolved_agent_base / Path(agent_package) / "evals").resolve()
-        return (resolved_project_root / "evals").resolve()
+        candidates = [root for root in (_agent_evals_root(), (resolved_project_root / "evals").resolve()) if root]
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate
+        return candidates[-1]
 
     spec_payload, parsed_spec = _load_spec_payload(resolved_project_root)
     meta_payload = _meta_from_spec(parsed_spec)
+
+    # When no spec file exists, enrich meta from the live planner catalog.
+    # This allows orchestrator-based agents (without agent.yaml) to show tools/flows.
+    def _enrich_meta_from_planner() -> None:
+        if parsed_spec is not None:
+            return  # spec already populated everything
+        wrapper = agent_wrapper
+        if wrapper is None:
+            return
+        planner = None
+        try:
+            planner = getattr(wrapper, "_planner", None)
+        except Exception:
+            pass
+        if planner is None:
+            try:
+                orchestrator = getattr(wrapper, "_orchestrator", None)
+                if orchestrator is not None:
+                    planner = getattr(orchestrator, "__dict__", {}).get("_planner")
+            except Exception:
+                pass
+        if planner is None:
+            return
+        specs = getattr(planner, "_specs", None) or getattr(planner, "_execution_specs", None) or []
+        meta_payload.tools = [
+            {
+                "name": getattr(s, "name", ""),
+                "description": getattr(s, "desc", ""),
+                "side_effects": getattr(s, "side_effects", "pure"),
+                "tags": list(getattr(s, "tags", ())),
+            }
+            for s in specs
+            if getattr(s, "name", None)
+        ]
+        meta_payload.planner["max_iters"] = getattr(planner, "_max_iters", None)
+        meta_payload.planner["hop_budget"] = getattr(planner, "_hop_budget", None)
+        meta_payload.planner["absolute_max_parallel"] = getattr(planner, "_absolute_max_parallel", None)
+        reflection = getattr(planner, "_reflection_config", None)
+        meta_payload.planner["reflection"] = bool(getattr(reflection, "enabled", reflection))
+        # Derive agent name from orchestrator class if available
+        try:
+            orchestrator = getattr(wrapper, "_orchestrator", None)
+            if orchestrator is not None:
+                config_name = getattr(getattr(orchestrator, "config", None), "agent_name", None)
+                cls_name = type(orchestrator).__name__
+                if config_name:
+                    meta_payload.agent["name"] = str(config_name)
+                elif cls_name.endswith("Orchestrator"):
+                    friendly = cls_name[: -len("Orchestrator")]
+                    meta_payload.agent["name"] = friendly[0].lower() + friendly[1:] if friendly else "agent"
+        except Exception:
+            pass
 
     # Determine session_store first so we can create SessionManager before load_agent.
     # This allows the orchestrator to share the same SessionManager for background task visibility.
@@ -1048,6 +1109,8 @@ def create_playground_app(
         except Exception as exc:
             _LOGGER.warning(f"Agent initialization failed during startup: {exc}")
             # Continue anyway - lazy init will retry on first request
+        finally:
+            _enrich_meta_from_planner()
         try:
             yield
         finally:  # pragma: no cover - exercised in integration
@@ -2394,10 +2457,54 @@ def create_playground_app(
         if not evals_root.exists() or not evals_root.is_dir():
             return []
 
-        entries: list[EvalDatasetBrowseEntry] = []
-        for dataset_path in sorted(evals_root.rglob("*.jsonl")):
-            if not dataset_path.is_file():
+        dataset_paths: list[Path] = []
+        for path in sorted(evals_root.rglob("*.jsonl")):
+            if not path.is_file():
                 continue
+            try:
+                resolved_path = path.resolve(strict=True)
+            except OSError:
+                continue
+            if resolved_path != resolved_project_root and resolved_project_root not in resolved_path.parents:
+                continue
+            dataset_paths.append(path)
+        referenced: Path | None = None
+        for spec_path in sorted(evals_root.rglob("evaluate.spec.json")):
+            try:
+                dataset_ref = json.loads(spec_path.read_text(encoding="utf-8")).get("dataset_path")
+            except (AttributeError, OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(dataset_ref, str):
+                continue
+            candidate = Path(dataset_ref)
+            if not candidate.is_absolute():
+                candidate = resolved_project_root / candidate
+            candidate = candidate.resolve()
+            if candidate.is_dir():
+                candidate /= "dataset.jsonl"
+            if candidate in dataset_paths:
+                referenced = candidate
+                break
+
+        def _preference(path: Path) -> tuple[bool, bool, bool, str]:
+            try:
+                runnable = False
+                with path.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        if not line.strip():
+                            continue
+                        payload = json.loads(line)
+                        if isinstance(payload, dict) and payload.get("split") == "val":
+                            runnable = True
+                            break
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                runnable = False
+            relative = path.relative_to(evals_root)
+            return (path != referenced, not runnable, "playground_export" in relative.parts, relative.as_posix())
+
+        preferred = min(dataset_paths, key=_preference, default=None)
+        entries: list[EvalDatasetBrowseEntry] = []
+        for dataset_path in dataset_paths:
             try:
                 rel_project = dataset_path.relative_to(resolved_project_root)
                 rel_label = dataset_path.relative_to(evals_root)
@@ -2407,7 +2514,7 @@ def create_playground_app(
                 EvalDatasetBrowseEntry(
                     path=rel_project.as_posix(),
                     label=rel_label.as_posix(),
-                    is_default=dataset_path.name == "dataset.jsonl",
+                    is_default=dataset_path == preferred,
                 )
             )
         entries.sort(key=lambda entry: (entry.label, entry.path))
@@ -2483,7 +2590,7 @@ def create_playground_app(
             raise HTTPException(status_code=500, detail="State store is not configured")
 
         def _default_eval_export_dir() -> Path:
-            return (_resolve_evals_root() / "playground_export" / "dataset").resolve()
+            return ((_agent_evals_root() or _resolve_evals_root()) / "playground_export" / "dataset").resolve()
 
         def _auto_rename_output_dir(path: Path) -> Path:
             if not path.exists():
