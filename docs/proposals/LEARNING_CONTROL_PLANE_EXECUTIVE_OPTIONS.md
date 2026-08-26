@@ -24,34 +24,33 @@ This merges the holistic PenguiFlow vision with a framework-neutral product
 boundary.
 
 ```mermaid
-flowchart LR
-    PF[PenguiFlow agent] --> NP[PenguiFlow normalizer]
-    LG[LangGraph agent] --> NL[LangGraph adapter]
-    OA[OpenAI agent] --> NO[OpenAI adapter]
-    OT[Other framework] --> NX[Framework adapter]
+flowchart TB
+    PF["PenguiFlow agent"] --> NP["PenguiFlow normalizer"]
+    LG["LangGraph agent"] --> NL["LangGraph adapter"]
+    OA["OpenAI agent"] --> NO["OpenAI adapter"]
+    OT["Other framework"] --> NX["Framework adapter"]
 
-    NP --> CT[CanonicalTrajectoryV1]
+    NP --> CT["CanonicalTrajectoryV1"]
     NL --> CT
     NO --> CT
     NX --> CT
 
-    CT --> LCP
-
-    subgraph LCP[PenguiFlow-powered Learning Control Plane]
-      TAG[Tag and label]
-      ANA[Analyze episodes]
-      MINE[Mine candidates]
-      EVAL[Evaluate]
-      GATE[Statistical gate]
-      GOV[Promote and govern]
+    subgraph LCP["PenguiFlow-powered Learning Control Plane"]
+      TAG["Tag and label"]
+      ANA["Analyze episodes"]
+      MINE["Mine candidates"]
+      EVAL["Evaluate"]
+      GATE["Statistical gate"]
+      GOV["Promote and govern"]
       TAG --> ANA --> MINE --> EVAL --> GATE --> GOV
     end
 
-    GOV --> AD[Framework activation adapter]
-    AD --> LIVE[Live agent runtime]
-    LIVE -->|Native trace| MN[Registered framework normalizer]
-    MN --> CT
+    CT --> TAG
+    GOV --> AD["Framework activation adapter"]
+    AD --> LIVE["Live agent runtime"]
 ```
+
+Live traces return through the registered normalizer in the next learning cycle.
 
 ## Shared architecture
 
@@ -99,15 +98,15 @@ projection, references/gold, domain metrics, and required evaluation context.
 Learning Control Plane runs it and retains final promotion authority.
 
 ```mermaid
-flowchart LR
-    A[Agent team] -->|publishes| EP[Agent Evaluation Package]
-    CT[CanonicalTrajectoryV1] --> ER[Isolated evaluator]
+flowchart TB
+    A["Agent team"] -->|publishes| EP["Agent Evaluation Package"]
+    CT["CanonicalTrajectoryV1"] --> ER["Isolated evaluator"]
     EP --> ER
-    GOLD[Agent-owned gold and references] --> ER
-    ER --> EV[Per-example normalized evidence]
-    EV --> CP[Learning Control Plane]
-    CP --> STATS[Central statistics and safety policy]
-    STATS --> DEC[Promotion decision]
+    GOLD["Agent-owned gold and references"] --> ER
+    ER --> EV["Per-example normalized evidence"]
+    EV --> CP["Learning Control Plane"]
+    CP --> STATS["Central statistics and safety policy"]
+    STATS --> DEC["Promotion decision"]
 ```
 
 **Control plane owns**
@@ -152,16 +151,16 @@ trajectories centrally. Agent owners configure metrics through a governed Metric
 Studio rather than shipping executable evaluation code.
 
 ```mermaid
-flowchart LR
-    OWNER[Agent owner] --> UX[Metric Studio]
-    UX --> DEF[Versioned Metric Definition]
-    DEF --> REG[Control-plane Metric Registry]
-    CT[CanonicalTrajectoryV1] --> ER[Central evaluator]
-    GOLD[Governed gold and references] --> ER
+flowchart TB
+    OWNER["Agent owner"] --> UX["Metric Studio"]
+    UX --> DEF["Versioned Metric Definition"]
+    DEF --> REG["Control-plane Metric Registry"]
+    CT["CanonicalTrajectoryV1"] --> ER["Central evaluator"]
+    GOLD["Governed gold and references"] --> ER
     REG --> ER
-    ER --> EV[Per-example evidence]
-    EV --> STATS[Statistical and safety gate]
-    STATS --> DEC[Promotion decision]
+    ER --> EV["Per-example evidence"]
+    EV --> STATS["Statistical and safety gate"]
+    STATS --> DEC["Promotion decision"]
 ```
 
 **Metric Studio capabilities**
@@ -224,17 +223,17 @@ canonical trajectory and evidence contract.
 
 ```mermaid
 flowchart TB
-    CT[CanonicalTrajectoryV1] --> SM[Standard control-plane metrics]
-    CT --> DM[Agent/domain metric package]
+    CT["CanonicalTrajectoryV1"] --> SM["Standard control-plane metrics"]
+    CT --> DM["Agent or domain metric package"]
 
-    SM --> E[Normalized per-example evidence]
+    SM --> E["Normalized per-example evidence"]
     DM --> E
 
-    E --> G[Central statistical and safety gate]
-    G --> P[Promotion decision]
+    E --> G["Central statistical and safety gate"]
+    G --> P["Promotion decision"]
 
-    REG[Metric Registry and Studio] --> SM
-    APPROVAL[Independent package approval] --> DM
+    REG["Metric Registry and Studio"] --> SM
+    APPROVAL["Independent package approval"] --> DM
 ```
 
 **Tier 1: Control-plane metrics**
