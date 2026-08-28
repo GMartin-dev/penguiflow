@@ -15,7 +15,7 @@ two optional evaluation backends:
   report behavior without requiring MLflow.
 - **MLflow backend:** uses MLflow traces, Evaluation Datasets,
   `mlflow.genai.evaluate()`, scorers, evaluation runs, and assessments as the
-  learning-plane evidence source of truth.
+  evidence store for standalone MLflow-backed evaluations.
 
 Do not place the current local evaluation loop in front of MLflow. Do not make
 MLflow understand PenguiFlow trajectories directly. Both backends reuse the
@@ -79,12 +79,12 @@ not provide:
 These capabilities should move behind `PenguiFlowPredictor` and shared metric
 implementations, not be discarded.
 
-### 2.3 Why not build a full neutral provider layer now
+### 2.3 Why not build Learning Plane integration here
 
-The Learning Control Plane should remain framework-neutral, but building its
-complete provider contract is outside this refactor. This work should establish
-small adapter seams that can later implement that contract without making
-current feasibility work depend on speculative abstractions.
+Standalone MLflow evaluation is useful without continuous learning. A separate
+`PenguiFlowLearningPlaneProvider` may reuse this backend, but trajectory
+publication, cohort curation, candidate-use proof, approval, and delivery are
+outside this refactor.
 
 ## 3. Confirmed Feasibility Findings
 
@@ -125,11 +125,10 @@ It does not yet prove:
 - adaptation of an existing PenguiFlow trajectory metric;
 - safe async execution without per-case `asyncio.run()`;
 - failure, pause, cancellation, and timeout representation;
-- immutable dataset revisions or content-addressed cohort manifests;
-- independent validation and sealed test cohorts;
+- immutable dataset revisions or content-addressed evaluation snapshots;
 - enforced redaction of contexts and tool observations;
 - complete source-record-run-prediction-scorer lineage;
-- candidate application or promotion authority;
+- reproducible candidate runtime configuration;
 - operation with another agent framework.
 
 These are parity and hardening gates, not blockers to the selected architecture.
@@ -144,12 +143,12 @@ These are parity and hardening gates, not blockers to the selected architecture.
 | Domain success criteria | Agent evaluation package |
 | Local JSONL and local reports | `LocalEvaluationBackend` |
 | MLflow datasets, runs, traces, assessments | `MLflowEvaluationBackend` |
-| Trace-to-case projection and redaction | Agent/framework projector |
-| Cohort freezing, promotion, activation, rollback | Learning Control Plane |
+| Evaluation trace-to-case projection and redaction | Agent evaluation package |
+| Investigation trajectory and learning lifecycle | Separate Learning Plane provider |
 | Runtime conversation memory | Agent runtime StateStore, not MLflow |
 
-MLflow is the learning-evidence source of truth for MLflow-backed jobs. It does
-not replace runtime StateStore or become promotion authority.
+MLflow is the evaluation-evidence store for MLflow-backed jobs. This backend does
+not replace runtime StateStore or require a Learning Control Plane.
 
 ## 6. Shared Data Contracts
 
@@ -320,6 +319,10 @@ Responsibilities:
 6. Persist evaluation run IDs, per-case assessments, and prediction traces.
 7. Return normalized `EvaluationResult` with MLflow references.
 
+The backend does not publish `InvestigationTrajectoryV1`, select learning
+cohorts, prove candidate use, manage proposals, or deliver learned assets. Those
+are responsibilities of the separate Learning Plane provider.
+
 MLflow record shape:
 
 ```text
@@ -342,7 +345,7 @@ source
 Avoid embedding complete native trajectories when scorers only need a small
 projection. Retain an immutable trace/artifact reference for deeper inspection.
 
-## 11. Trace Projection and Replay Context
+## 11. Evaluation-Case Projection and Replay Context
 
 The source trace has two relevant context views:
 
@@ -413,12 +416,11 @@ Exit criterion: local backend works without MLflow installed or reachable.
 
 - Enforce projection/redaction policy.
 - Pin dataset revision/content digest.
-- Add independent cohorts and sealed test selection.
 - Capture explicit failures and exclusions for every frozen case.
 - Add model, deployment, metric, scorer, and config fingerprints.
 
-Exit criterion: evaluation evidence is suitable for control-plane promotion
-gates, not only experimentation.
+Exit criterion: standalone evaluation evidence is reproducible and exposes
+stable references that an optional Learning Plane provider can consume.
 
 ## 13. Initial File Plan
 
@@ -446,6 +448,9 @@ examples/planner_enterprise_agent_v2/evals/
   metrics.py
   mlflow_scorers.py
 ```
+
+Learning Plane trajectory publication belongs in its provider package, not in
+either evaluation backend.
 
 ## 14. Compatibility Strategy
 
@@ -493,13 +498,15 @@ Refactor is complete when:
    prediction trace, scorer version, and model/config fingerprint.
 9. Local JSONL and MLflow datasets are backend-native persistence formats; no
    mandatory round-trip through both exists.
-10. Learning Control Plane consumes normalized evidence and remains independent
-    of both PenguiFlow and MLflow implementation types.
+10. MLflow evaluation works without Learning Plane configuration and returns
+    stable references usable by an optional Learning Plane provider.
 
 ## 17. Non-Goals
 
 - Replacing runtime StateStore with MLflow.
 - Making MLflow responsible for candidate promotion or activation.
+- Publishing `InvestigationTrajectoryV1` or its query index.
+- Learning cohort curation, candidate-use proof, approval, or skill delivery.
 - Standardizing all agent-framework trajectories.
 - Migrating every existing metric before one trajectory-aware metric proves the
   adapter contract.
@@ -511,7 +518,7 @@ Refactor is complete when:
 ## 18. Final Architecture
 
 ```mermaid
-flowchart LR
+graph LR
     C[Evaluation cases] --> L[LocalEvaluationBackend]
     D[MLflow Evaluation Dataset] --> M[MLflowEvaluationBackend]
 
@@ -526,9 +533,6 @@ flowchart LR
 
     LM --> LR[Local reports/artifacts]
     MS --> MR[MLflow runs/traces/assessments]
-
-    LR --> CP[Learning Control Plane evidence]
-    MR --> CP
 ```
 
 Consistency lives in prediction and metric semantics. Persistence and evaluation
