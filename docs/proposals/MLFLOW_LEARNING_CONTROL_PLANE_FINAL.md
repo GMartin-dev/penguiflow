@@ -6,7 +6,8 @@
 - **Related:**
   [Framework-Agnostic Learning Control Plane](./FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md),
   [Learning Plane skill first](./Learning%20Plane%20skill%20first.md),
-  [Dual Local and MLflow Evaluation Backends](./DUAL_LOCAL_MLFLOW_EVALUATION_BACKENDS.md)
+  [Dual Local and MLflow Evaluation Backends](./DUAL_LOCAL_MLFLOW_EVALUATION_BACKENDS.md),
+  [Learning Plane Evidence and Reusable Lessons](./LEARNING_PLANE_EVIDENCE_AND_REUSABLE_LESSONS.md)
 
 ## 1. Decision
 
