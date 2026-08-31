@@ -25,53 +25,34 @@ graph LR
 
 This is not an agent that rewrites itself. It learns bounded runtime assets that remain visible, versioned, reversible, and subordinate to existing permissions.
 
+![Governed AI agent evolution process](./Governed_AI_Agent_Evolution_Process.png)
+
 > Start with a sizing experiment, not a full build. If evidence contains too few repeated procedures, or outcomes are too weak to judge them, the learning loop is not worth operating. Standalone MLflow evaluation remains useful either way.
 
 # Architecture
 
 Control-plane discovery, evaluation, approval, and delivery run outside the live request path. Local provider instrumentation records evidence during execution, but agent requests never depend synchronously on Learning Control Plane availability. If the plane is unavailable, agents continue with their last confirmed configuration.
 
-![Governed Learning Control Plane overview](./Governed_Learning_Control_Plane_Overview.png)
-
 The following logical view isolates system boundaries and authoritative handoffs:
 
 ```mermaid
-graph LR
-    subgraph Agent[Agent boundary]
-        A[Agent runtime]
-        B[MLflow evaluation backend]
-        P[Learning Plane provider]
-        K[Agent evaluation package]
-    end
+flowchart TB
+    A[Production agent runs]
+    O[Authorized outcome snapshots]
+    M[MLflow evidence]
+    C[Control Plane discovers<br/>and proposes skill]
+    E[Agent evaluation package<br/>PenguiFlow evaluates locally]
+    G[Control Plane verifies evidence<br/>and applies gates]
+    H[Authorized human review]
+    D[Provider rechecks policy<br/>and delivers confirmed skill]
 
-    subgraph Evidence[MLflow evidence]
-        M[Traces and outcomes]
-        V[Datasets, scores, and lineage]
-    end
-
-    subgraph Control[Learning Control Plane]
-        C[Discover candidates]
-        E[Coordinate evaluation]
-        H[Govern confirmation]
-        R[Authoritative decision records]
-    end
-
-    O[Domain outcome system] -->|Authorized redacted snapshot| M
-
-    A --> B
-    B --> M
-    A --> P
-    P --> M
+    A --> M
+    O --> M
     M --> C
     C --> E
-    K --> E
-    E --> B
-    B --> V
-    V --> H
-    V --> R
-    H --> R
-    R --> P
-    P -->|Policy recheck and receipt| A
+    E -->|Results stored in MLflow| G
+    G --> H
+    H --> D
 ```
 
 | Owner | Responsibility | Explicit boundary |
@@ -95,9 +76,9 @@ Each supported framework will expose two separate integrations:
 
 Teams can adopt MLflow evaluation without adopting continuous learning.
 
-Only one cross-framework payload schema is enforced: a portable investigation record, accompanied by bounded metadata used to find it. Native traces, replay behavior, datasets, predictors, and domain scorers stay with the agent or framework that understands them.
+Only one cross-framework payload schema is enforced: a portable investigation record, accompanied by bounded metadata used to find it. Native traces, replay behavior, evaluation packages, and domain scorers stay with the agent or framework that understands them.
 
-Each agent also binds its trace projection, dataset shape, predictor, expectations, and scorers in one versioned evaluation package. The Learning Control Plane invokes that package and records its version; it does not interpret agent-specific test cases or scores.
+Each agent also binds its trace projection, dataset shape, evaluation configuration, expectations, and scorers in one versioned evaluation package. PenguiFlow evaluation uses local library primitives; any webhook, worker, or deployment connector needed by external learning orchestration is deployment-owned and outside the library. The Learning Control Plane coordinates the package and records its version; it does not interpret agent-specific test cases or scores.
 
 **Design principle:** the contracts carry the product, not PenguiFlow internals. After the first provider is proven, supporting another framework should require an adapter, not a central-service rewrite.
 
@@ -129,7 +110,7 @@ Deterministic **Workflows** are the next candidate surface if the skill loop pro
 
 Investigation records contain only allowlisted or redacted content. Native evaluation datasets have a separate authorization, redaction, and secret-check boundary. Trace text, tool output, feedback, generated skills, and scorer claims are treated as untrusted; blocking scorer identity and version are verified independently.
 
-Evaluation may run in a local package, endpoint, worker, or isolated agent. Whichever path is selected must declare credentials, tool access, state-reset behavior, timeouts, and side-effect policy. Initial pilots should use simulated, isolated, or explicitly approved read-only tools.
+External learning orchestration may reach an agent through a deployment-owned endpoint, worker, or job. That connector must declare credentials, tool access, state-reset behavior, timeouts, and side-effect policy. Initial pilots should use simulated, isolated, or explicitly approved read-only tools.
 
 # Benefits and limitations
 

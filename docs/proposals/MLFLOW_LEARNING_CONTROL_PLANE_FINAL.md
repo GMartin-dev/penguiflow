@@ -19,7 +19,8 @@ The framework MLflow evaluation backend is independently useful and does not
 require the Learning Control Plane.
 The Learning Control Plane remains the workflow and authorization authority. It
 selects evidence, proposes advisory skills, coordinates evaluation, verifies
-lineage, and governs approval and delivery. Framework adapters execute agents
+lineage, and governs approval and delivery. Agent-owned evaluation packages use
+their deployment's execution path; Learning Plane providers publish evidence
 and deliver confirmed skills.
 
 Domain knowledge does not move into the central service. Agent teams define
@@ -27,8 +28,8 @@ domain scorers and a small declarative learning profile. Managed MLflow scorers,
 agent-owned scorers, and platform scorers can participate in the same learning
 run.
 
-Each agent owns its evaluation trace projection, dataset schema, predictor
-inputs, expectations, and domain scorers as one versioned evaluation package.
+Each agent owns its evaluation trace projection, dataset schema, evaluation
+configuration, expectations, and domain scorers as one versioned evaluation package.
 The Learning Control Plane uses a separate portable episodic
 `InvestigationTrajectoryV1` only for cross-agent discovery and curation.
 
@@ -50,7 +51,7 @@ coupling.
 
 `InvestigationTrajectoryV1` is the only enforced cross-framework payload
 schema. The compact trace metadata index is a transport/query contract. Native
-traces, datasets, predictors, scorers, metrics, and adapter internals remain
+traces, datasets, evaluation packages, scorers, metrics, and adapter internals remain
 framework- or agent-owned.
 
 ## 2. Confirmed Feasibility
@@ -61,7 +62,7 @@ The enterprise-agent experiment proved this native MLflow path:
 MLflow source trace
   -> trace-derived MLflow Evaluation Dataset
   -> mlflow.genai.evaluate()
-  -> agent predict_fn
+  -> MLflow predict_fn adapter
   -> custom scorer
   -> evaluation run and linked prediction trace
 ```
@@ -109,17 +110,19 @@ Broader optimization surfaces require separate designs and authorization.
 
 ```mermaid
 graph LR
-    A[Agent runtime] --> P[Framework predictor]
-    P --> B[Local evaluation backend]
-    P --> E[MLflow evaluation backend]
+    B[Local evaluation backend] --> P[Agent evaluation package]
+    E[MLflow evaluation backend] --> P
+    P --> A[Agent execution]
     E --> M[MLflow evaluation evidence]
-    A --> F[Optional Learning Plane provider]
+    X[Agent runtime] --> F[Optional Learning Plane provider]
     F --> T[Investigation trajectory attachments]
     M --> L[Learning Control Plane]
     T --> L
     M --> J[Automatic MLflow LLM judges]
     L --> H[Human review]
-    H --> C[Confirmed delivery through provider]
+    H --> C[Confirmed decision]
+    C --> F
+    F --> X
     J --> R[MLflow assessments]
 ```
 
@@ -135,7 +138,7 @@ graph LR
 | Evaluation dataset materialization | Agent evaluation package |
 | Domain success semantics and custom scorer code | Agent team |
 | Managed LLM judges | MLflow |
-| Agent execution and evaluation trace translation | Framework predictor and evaluation backend |
+| Agent execution configuration and evaluation trace translation | Agent evaluation package |
 | Skill proposal lifecycle and approval policy | Learning Control Plane |
 | Candidate-use proof and skill delivery | Learning Plane provider |
 
@@ -298,7 +301,7 @@ AgentEvaluationPackage
   package_digest
   source_trace_projector_ref
   dataset_schema_ref
-  predictor_ref
+  evaluation_entrypoint_ref
   scorer_refs[]
   expectation_schema_refs[]
 ```
@@ -444,7 +447,7 @@ does not by itself prove that skill is better.
 
 Baseline and candidate evaluation use the same agent version, model, tools,
 configuration, executor, and dataset. The only intended difference is addition
-of the candidate skill.
+of the exact candidate skill through framework-native skill configuration.
 
 ```text
 baseline = stable agent
@@ -471,7 +474,9 @@ A tied candidate that changes no case is rejected as `no_effect`.
 
 ## 10. Evaluation Execution
 
-Execution topology remains open:
+The agent evaluation package and deployment integration select execution
+topology. The Learning Control Plane coordinates evaluation but does not define
+the connector, and PenguiFlow's standalone evaluation library remains local:
 
 - Local agent or project package.
 - Webhook or deployed evaluation endpoint.
@@ -575,8 +580,8 @@ separate product deltas are required.
 
 Standalone `MLflowEvaluationBackend`:
 
-1. Shared `PenguiFlowPredictor` for agent discovery, execution, optional isolated
-   StateStore, and prediction evidence.
+1. Shared local `run_one` construction for agent discovery, execution, optional
+   isolated StateStore, and prediction evidence.
 2. Agent-owned source-trace-to-dataset projector with controlled replay context.
 3. MLflow Dataset creation and `predict_fn` adapter.
 4. Adapter from existing PenguiFlow metrics to MLflow scorers.
@@ -585,7 +590,7 @@ Standalone `MLflowEvaluationBackend`:
 Opt-in `PenguiFlowLearningPlaneProvider`:
 
 1. Portable `InvestigationTrajectoryV1` projector and attachment publisher.
-2. Candidate construction and exact-use proof.
+2. Framework-native candidate skill overlay and exact-use proof.
 3. Confirmed skill delivery and delivery receipts.
 
 Local JSONL evaluation remains useful for CI and development. Production
@@ -598,7 +603,7 @@ not yet implemented. Standalone MLflow evaluation uses:
 
 ```python
 backend = MLflowEvaluationBackend()
-result = await backend.evaluate(dataset, predictor, metrics)
+result = await backend.evaluate(dataset, run_one, metrics)
 ```
 
 Learning Plane participation is separately enabled:
@@ -665,7 +670,7 @@ ends. This is adapter-author guidance, not formal LangChain support.
 
 ### Phase 1: PenguiFlow MLflow Evaluation
 
-- Extract shared predictor and scorer adapters.
+- Consolidate local `run_one` semantics and scorer adapters.
 - Prove complete source-trace, dataset, evaluation, prediction, and score lineage.
 - Confirm the backend operates without Learning Plane configuration.
 
@@ -730,7 +735,7 @@ First iteration succeeds when:
 - **MLflow stores learning evidence.**
 - **Learning Control Plane curates evidence, proposes skills, coordinates
   evaluation, and governs approval.**
-- **Agent teams own evaluation datasets, predictors, expectations, and domain
+- **Agent teams own evaluation datasets, evaluation configuration, expectations, and domain
   scorers as one package.**
 - **Framework MLflow evaluation backends run independently of the Learning
   Plane.**

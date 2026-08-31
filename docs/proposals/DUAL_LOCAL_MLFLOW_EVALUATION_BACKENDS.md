@@ -8,7 +8,7 @@
 
 ## 1. Decision
 
-Refactor PenguiFlow evaluation around shared prediction and metric semantics with
+Refactor PenguiFlow evaluation around shared local execution and metric semantics with
 two optional evaluation backends:
 
 - **Local backend:** preserves current JSONL, offline/CI, StateStore, and local
@@ -18,14 +18,14 @@ two optional evaluation backends:
   evidence store for standalone MLflow-backed evaluations.
 
 Do not place the current local evaluation loop in front of MLflow. Do not make
-MLflow understand PenguiFlow trajectories directly. Both backends reuse the
-same PenguiFlow predictor and metric logic through thin adapters.
+MLflow understand PenguiFlow trajectories directly. Both backends use the same
+local `run_one` semantics and metric logic through thin adapters.
 
 The minimal shared surface is:
 
 ```python
-class Predictor(Protocol):
-    async def predict(self, inputs: EvaluationInputs) -> PredictionResult: ...
+class RunOne(Protocol):
+    async def __call__(self, inputs: EvaluationInputs) -> PredictionResult: ...
 
 
 class Metric(Protocol):
@@ -40,7 +40,7 @@ class EvaluationBackend(Protocol):
     async def evaluate(
         self,
         dataset: object,
-        predictor: Predictor,
+        run_one: RunOne,
         metrics: Sequence[Metric],
     ) -> EvaluationResult: ...
 ```
@@ -76,8 +76,8 @@ not provide:
 - candidate and patch integration points;
 - offline and no-service execution.
 
-These capabilities should move behind `PenguiFlowPredictor` and shared metric
-implementations, not be discarded.
+These capabilities remain in PenguiFlow's local evaluation callable and shared
+metrics; this proposal does not introduce remote evaluation execution.
 
 ### 2.3 Why not build Learning Plane integration here
 
@@ -137,8 +137,8 @@ These are parity and hardening gates, not blockers to the selected architecture.
 
 | Concern | Owner |
 |---|---|
-| Agent construction and execution | `PenguiFlowPredictor` |
-| StateStore isolation and trajectory persistence | `PenguiFlowPredictor` |
+| Agent construction and execution | Local PenguiFlow evaluation callable |
+| StateStore isolation and trajectory persistence | Local PenguiFlow evaluation callable |
 | Native trajectory interpretation | PenguiFlow metric/helper code |
 | Domain success criteria | Agent evaluation package |
 | Local JSONL and local reports | `LocalEvaluationBackend` |
@@ -228,35 +228,35 @@ class EvaluationResult:
 For MLflow, `backend_refs` includes dataset, evaluation run, and trace IDs. For
 local execution it includes report and artifact paths when requested.
 
-## 7. Shared PenguiFlow Predictor
+## 7. Local PenguiFlow Evaluation Callable
 
-Extract one reusable `PenguiFlowPredictor` from current discovery and eval
-wrapper behavior.
+Both backends call the same locally executed `run_one`. It may use PenguiFlow's
+discovered planner/orchestrator path or an existing project-supplied callable.
+Remote orchestration protocols are outside this library refactor.
 
 Responsibilities:
 
-1. Build the agent once per evaluation worker or execution profile.
-2. Inject an isolated StateStore.
-3. Generate fresh runtime session and trace IDs.
-4. Pass replay-safe LLM and tool contexts.
-5. Execute the agent.
-6. Wait for asynchronous trajectory persistence.
-7. Read the persisted trajectory once.
-8. Return a complete `PredictionResult`.
-9. Preserve pause, failure, cancellation, and timeout status.
+1. Build or obtain the local planner/orchestrator.
+2. Inject an isolated StateStore when supported.
+3. Pass replay-safe inputs and controlled context.
+4. Execute one local agent run and collect its trajectory.
+5. Return a complete `PredictionResult` and execution references.
+6. Preserve pause, failure, cancellation, and timeout status.
 
-Candidate application must become an explicit predictor construction input.
-Do not rely indefinitely on inserting `__pf_patch_bundle` into context and
-hoping project code applies it.
+Candidate skill comparison is a separate local configuration concern. A
+candidate arm may make the exact skill available through PenguiFlow's existing
+`skills_provider` machinery or a small in-memory overlay; the backend does not
+interpret or persist the skill. The Learning Plane provider separately binds
+the candidate digest to use proof.
 
-The predictor is shared by both backends. This is the main consistency boundary:
-the same inputs and deployment bundle must produce the same execution semantics
-regardless of where evaluation evidence is persisted.
+Both backends use the same local callable semantics. This is the consistency
+boundary: the same inputs and local execution profile must produce comparable
+results regardless of evidence backend.
 
 ## 8. Shared Metrics and Backend Adapters
 
 Metric logic remains ordinary project/Penguiflow code. Backend adapters only
-translate invocation and result shape.
+translate callable and result shapes.
 
 ```text
 Shared metric implementation
@@ -286,7 +286,7 @@ It preserves:
 
 - current JSONL inputs;
 - local/CI execution without MLflow;
-- existing agent discovery behavior through `PenguiFlowPredictor`;
+- existing local agent discovery and execution behavior;
 - StateStore-backed trajectory capture;
 - local artifacts and reports;
 - existing CLI/API entry points where practical.
@@ -295,7 +295,7 @@ The current public API becomes a facade selecting this backend by default.
 Existing callers should not need to opt into a new class immediately.
 
 Do not expand the local backend during this refactor. Consolidate overlapping
-evaluation loops after shared predictor and metric parity exists.
+evaluation loops after local execution and metric parity exists.
 
 ## 10. MLflow Evaluation Backend
 
@@ -313,7 +313,7 @@ Responsibilities:
 
 1. Accept an MLflow Evaluation Dataset or dataset ID.
 2. Convert record inputs into `EvaluationInputs`.
-3. Delegate execution to shared `PenguiFlowPredictor`.
+3. Invoke local `run_one`; `predict_fn` remains the thin MLflow callable boundary.
 4. Return JSON-safe prediction evidence to MLflow.
 5. Wrap shared metrics as MLflow scorers.
 6. Persist evaluation run IDs, per-case assessments, and prediction traces.
@@ -373,13 +373,12 @@ known callback fields is insufficient for security and reproducibility.
 
 Exit criterion: current native MLflow feasibility remains reproducible.
 
-### Phase 1: Extract shared predictor
+### Phase 1: Consolidate local evaluation execution
 
-- Move agent discovery/execution and StateStore handling behind
-  `PenguiFlowPredictor`.
-- Reuse current persistence waiting and trajectory retrieval.
+- Reuse current local discovery, StateStore handling, persistence waiting, and
+  trajectory retrieval behind `run_one`.
 - Return explicit statuses and complete prediction evidence.
-- Make both current local API and feasibility MLflow `predict_fn` use it.
+- Make both current local API and MLflow `predict_fn` use the same local callable.
 
 Exit criterion: local evaluation behavior remains stable and MLflow prediction
 returns a persisted trajectory.
@@ -396,7 +395,7 @@ both wrappers.
 ### Phase 3: Add MLflow backend
 
 - Accept MLflow Dataset object or ID.
-- Call `mlflow.genai.evaluate()` with shared predictor and metric adapters.
+- Call `mlflow.genai.evaluate()` with local `predict_fn` and metric adapters.
 - Persist and return source trace, dataset, evaluation run, prediction trace,
   metric version, model, and config references.
 
@@ -429,7 +428,7 @@ Exact names may change during implementation, but keep responsibilities narrow:
 ```text
 penguiflow/evals/
   models.py              # EvaluationInputs/Case/Prediction/Score/Result
-  predictor.py           # PenguiFlowPredictor
+  local_run.py           # Local run_one construction and evidence capture
   metrics.py             # Shared metric normalization/adaptation
   backends/
     local.py             # Current local loop adapter
@@ -462,21 +461,21 @@ either evaluation backend.
 - Keep current metric decorator working through a compatibility adapter.
 - Avoid moving MLflow record shapes into generic planner modules.
 
-No immediate deletion is required. Remove duplicate runners only after local and
-MLflow parity checks pass.
+No immediate deletion is required. Remove obsolete duplicate evaluation loops
+only after local and MLflow parity checks pass.
 
 ## 15. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| MLflow lock-in | Keep shared predictor/metrics and local backend free of MLflow types |
+| MLflow lock-in | Keep local execution, metrics, and local backend free of MLflow types |
 | Context or tool-output leakage | Enforced allowlist projection before dataset publication |
 | Dataset mutation | Pin revision/content digest in evaluation evidence |
 | Missing prediction trajectory | Fail prediction explicitly after persistence wait/readback |
 | Async event-loop conflicts | Backend owns async boundary; no per-case nested `asyncio.run()` |
 | Metric divergence | One shared implementation with local and MLflow wrappers |
 | Trace identity confusion | Distinguish source, native prediction, and MLflow prediction IDs |
-| Candidate is not actually applied | Explicit candidate-aware predictor construction contract |
+| Candidate is not actually applied | Local skill overlay plus Learning Plane candidate-use proof |
 | Invalid holdout evidence | Independent source IDs and non-overlapping cohort manifests |
 | Over-generalization | Delay extra provider interfaces until another backend requires them |
 
@@ -486,7 +485,7 @@ Refactor is complete when:
 
 1. Existing local evaluation runs through `LocalEvaluationBackend` without
    requiring MLflow.
-2. Both backends invoke the same `PenguiFlowPredictor`.
+2. Both backends use the same local `run_one` semantics.
 3. MLflow evaluation consumes an MLflow Dataset directly.
 4. MLflow prediction returns persisted PenguiFlow trajectory evidence.
 5. One existing trajectory-aware metric runs through both local and MLflow
@@ -522,18 +521,18 @@ graph LR
     C[Evaluation cases] --> L[LocalEvaluationBackend]
     D[MLflow Evaluation Dataset] --> M[MLflowEvaluationBackend]
 
-    L --> P[PenguiFlowPredictor]
+    L --> P[Local run_one]
     M --> P
 
-    P --> A[Agent + isolated StateStore]
+    P --> A[Local agent + isolated StateStore]
     A --> R[PredictionResult]
 
-    R --> LM[Local metric adapter]
-    R --> MS[MLflow scorer adapter]
+    R -->|Local run| LM[Local metric adapter]
+    R -->|MLflow run| MS[MLflow scorer adapter]
 
     LM --> LR[Local reports/artifacts]
     MS --> MR[MLflow runs/traces/assessments]
 ```
 
-Consistency lives in prediction and metric semantics. Persistence and evaluation
-tracking remain backend-native.
+Consistency lives in local execution and metric semantics. Persistence and
+evaluation tracking remain backend-native.
