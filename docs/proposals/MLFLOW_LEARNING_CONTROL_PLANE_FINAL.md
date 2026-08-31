@@ -272,8 +272,9 @@ start time, status, execution fingerprint, request, steps, and redaction profile
 assessments are optional; their arrays may be empty. One attachment represents
 one native agent run. Session and parent investigation references connect
 multi-turn and multi-agent runs without nesting framework-native traces. Status
-uses `completed`, `failed`, `timed_out`, `cancelled`, `interrupted`, or
-`unknown`. Steps and events are ordered by `index`; `parent_ids` preserve
+uses `completed`, `paused`, `failed`, `timed_out`, `cancelled`, `interrupted`,
+or `unknown`, matching the normalized evaluation result status. Steps and
+events are ordered by `index`; `parent_ids` preserve
 branching, joins, retries, and other non-linear causality. Action `kind` covers
 model, tool, retrieval, handoff, agent, parallel, background, final, or custom
 work. Side effect uses `none`, `read`, `write`, `external`, or `unknown`.
@@ -459,7 +460,8 @@ This first iteration does not solve general agent-version reproducibility. It
 records the execution fingerprint and fails comparison when baseline and
 candidate fingerprints differ unexpectedly. The fingerprint covers agent and
 package versions, model and configuration, tool contracts, runtime image, and
-state-reset policy.
+state-reset policy. Model configuration includes provider routing, seed when
+supported, temperature, top-p, and other sampling or decoding settings.
 
 Required evidence:
 
@@ -467,6 +469,10 @@ Required evidence:
 - Exact candidate skill digest/version.
 - Per-case proof that the exact skill digest was selected or injected in the
   candidate arm using the same provider projection used for delivery.
+- Preregistered sample floor, minimum effect, and repeat-run policy; stochastic
+  runs repeat unless the policy records why one run is sufficient. Repeat count,
+  aggregation, uncertainty handling, and decision rule are deliberately left to
+  Phase 2 implementation exploration, but must be selected before evaluation.
 - At least one changed case and one improved case.
 - No unexpected regression under configured gates.
 - Explicit result, failure, or accepted exclusion for every requested case.
@@ -498,6 +504,7 @@ Passing evaluation creates a proposal; it does not activate the skill.
 ```text
 draft -> evaluated -> proposed -> approved -> confirmed -> delivered
                     -> rejected
+delivered -> deactivated
 ```
 
 Human review may occur through either:
@@ -513,7 +520,17 @@ cannot authorize delivery. Approval and confirmation may be separate actions or
 one policy-authorized action. Delivery is authorized only after confirmation.
 The framework adapter rechecks live target policy and records a digest-bound
 delivery receipt. Candidate-use evidence and the delivery receipt bind the same
-skill digest, provider target, and scope as the evidence snapshot.
+skill digest, provider target, scope, and evaluated execution fingerprint as the
+evidence snapshot. Platform operators may manually deactivate a delivered skill
+and record a deactivation receipt. Propagation timing and mechanism are
+deliberately left to Phase 3 implementation exploration, but must be selected
+and tested before Phase 3 exits.
+
+Changes to the active agent, model, sampling configuration, tool contracts, or
+evaluation package invoke a deployment-defined compatibility policy. That policy
+must require revalidation, deactivation, or an explicit operator waiver; its
+exact compatibility rules are deliberately left to Phase 3 implementation
+exploration.
 
 Canonical skill package storage is deployment-selectable:
 
@@ -538,6 +555,7 @@ First-iteration policy is intentionally simple:
 - `no_effect` rejection.
 - Human approval and confirmation.
 - Scope-bound delivery receipt.
+- Compatibility policy and manual deactivation receipt.
 
 Automatic activation, canary rollout, and autonomous advancement are deferred.
 
@@ -688,7 +706,10 @@ ends. This is adapter-author guidance, not formal LangChain support.
 
 - Deliver one confirmed advisory skill.
 - Prove scope, digest, policy recheck, and delivery receipt.
-- Support manual deactivation.
+- Support and test manual deactivation, including its receipt and selected
+  propagation behavior.
+- Select and test compatibility handling for agent, model, configuration, tool,
+  and evaluation-package changes.
 
 ### Product Roadmap
 
@@ -714,12 +735,12 @@ First iteration succeeds when:
 5. One existing domain scorer runs through the MLflow path.
 6. Baseline and candidate differ only by exact skill version.
 7. Candidate-use, changed-case, improvement, and regression evidence are
-   explicit.
+   explicit, with preregistered sample, effect, and repeat-run policy.
 8. Passing evaluation creates a proposal, not automatic activation.
 9. Approval and confirmation identify exact skill digest, evidence snapshot,
    scope, reviewer, and decision.
 10. Delivery requires confirmation, rechecks policy, and records exact package
-    digest.
+    digest and evaluated execution fingerprint.
 11. Agent developers can add an evaluation package and profile without
     changing Learning Control Plane code.
 12. Tenant access boundary, dataset projection, scorer identity, case set, and
@@ -730,6 +751,10 @@ First iteration succeeds when:
     works without Learning Plane configuration.
 15. PenguiFlow provides a separate inspectable Learning Plane provider and setup
     snippet for trajectory publication, candidate-use proof, and delivery.
+16. A delivered skill can be manually deactivated with a receipt, and relevant
+    execution-fingerprint changes invoke the selected compatibility policy.
+    Deactivation reaches its targets within the Phase 3 selected bound and
+    prevents subsequent skill use.
 
 ## 18. Final Boundary
 

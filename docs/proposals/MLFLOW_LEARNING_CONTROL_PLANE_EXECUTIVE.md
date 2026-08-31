@@ -106,7 +106,7 @@ Deterministic **Workflows** are the next candidate surface if the skill loop pro
 6. **Keep judgment with the domain.** Agent teams own business scorers. Probabilistic MLflow judges may assist but are not the sole promotion authority.
 7. **Bind every decision to the exact asset.** Evaluation, confirmation, and delivery reference the same immutable skill digest. MLflow review is evidence only; the Learning Control Plane authenticates the reviewer, verifies their role, and records the authoritative decision.
 8. **Verify the handoff.** Before delivery, the provider rechecks live target policy and customer scope, installs the exact confirmed version, and records a scope-bound receipt.
-9. **Keep the off-switch.** Every delivered skill can be deactivated. If evidence cannot be verified, learning stops while production agents keep running.
+9. **Keep the off-switch.** Every delivered skill can be deactivated by the platform operator with a receipt. Propagation details remain Phase 3 implementation exploration and must be selected and tested before delivery exits. If evidence cannot be verified, learning stops while production agents keep running.
 
 Investigation records contain only allowlisted or redacted content. Native evaluation datasets have a separate authorization, redaction, and secret-check boundary. Trace text, tool output, feedback, generated skills, and scorer claims are treated as untrusted; blocking scorer identity and version are verified independently.
 

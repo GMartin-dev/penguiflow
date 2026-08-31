@@ -1,7 +1,7 @@
 # Refactor Plan: Dual Local and MLflow Evaluation Backends
 
 - **Status:** Proposed
-- **Date:** 2026-08-27
+- **Date:** 2026-08-31
 - **Scope:** PenguiFlow evaluation execution and persistence
 - **Related:**
   [Framework-Agnostic Learning Control Plane](./FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md)
@@ -13,9 +13,10 @@ two optional evaluation backends:
 
 - **Local backend:** preserves current JSONL, offline/CI, StateStore, and local
   report behavior without requiring MLflow.
-- **MLflow backend:** uses MLflow traces, Evaluation Datasets,
-  `mlflow.genai.evaluate()`, scorers, evaluation runs, and assessments as the
-  evidence store for standalone MLflow-backed evaluations.
+- **MLflow backend:** uses Evaluation Datasets, `mlflow.genai.evaluate()`,
+  scorers, evaluation runs, assessments, and any evaluation-linked prediction
+  traces produced by MLflow as the evidence store for standalone MLflow-backed
+  evaluations.
 
 Do not place the current local evaluation loop in front of MLflow. Do not make
 MLflow understand PenguiFlow trajectories directly. Both backends use the same
@@ -48,6 +49,12 @@ class EvaluationBackend(Protocol):
 Do not introduce separate dataset-provider, tracker, run-store, or orchestrator
 interfaces yet. Split those concerns only when a concrete mixed-backend use
 case requires it.
+
+Runtime tracing is a separate, narrower concern. PenguiFlow will emit runtime
+agent and LLM spans through OpenTelemetry, while MLflow remains the optional
+evaluation backend. Replacing MLflow runtime tracing must not change the shared
+evaluation contracts, dataset schemas, metric semantics, or backend ownership
+defined here.
 
 ## 2. Why This Path
 
@@ -86,12 +93,61 @@ Standalone MLflow evaluation is useful without continuous learning. A separate
 publication, cohort curation, candidate-use proof, approval, and delivery are
 outside this refactor.
 
+### 2.4 Runtime tracing: match MLflow autolog with less coupling
+
+The runtime integration should preserve the developer experience and useful
+trace shape demonstrated by `mlflow.trace()` and `mlflow.litellm.autolog()`
+without making MLflow a runtime dependency. The minimal public surface is:
+
+```python
+from penguiflow.otel import autolog
+
+autolog(
+    log_traces=True,
+    log_inputs_outputs=True,
+    disable=False,
+    silent=False,
+)
+```
+
+`autolog()` enables PenguiFlow's built-in instrumentation and uses the global
+OpenTelemetry provider. It does not configure an SDK, exporter, sampler,
+resource, endpoint, or credentials; the application owns those decisions. A
+missing SDK leaves the OpenTelemetry API as a low-overhead no-op.
+
+Instrumentation stays at two existing central boundaries:
+
+1. `ReactPlanner.run()` creates the agent/root span.
+2. The existing native `LLMTraceSink` seam creates one child span for every
+   planner, repair, reflection, summarizer, and fallback-model inference.
+
+Do not add a general runtime-tracer provider hierarchy until a second concrete
+runtime implementation requires one. Do not monkey-patch LiteLLM. The native
+LLM seam is smaller, covers PenguiFlow transports uniformly, and preserves
+correct active OTel context.
+
+For parity with MLflow autolog, the root span records the initial effective
+system prompt, query/input, initial LLM context, agent/model/config identifiers,
+PenguiFlow trace ID, final answer, finish reason, status, and OTel trace ID. LLM
+spans record effective request messages, response, provider/model, response
+mode, token use, cost, retries, streaming, latency, phase, and errors. Use OTel
+GenAI semantic conventions where available.
+
+`log_inputs_outputs=True` is the explicit-autolog compatibility default. Before
+content reaches OTel, apply configured redaction and size limits. Never record
+credentials or hidden reasoning. With `log_inputs_outputs=False`, retain only
+content digests, character counts, prompt/config versions, token use, timing,
+and other non-content metadata. Record the initial effective system prompt once
+on the root span; child LLM spans may reference its digest instead of repeating
+it.
+
 ## 3. Confirmed Feasibility Findings
 
 The enterprise v2 feasibility work confirmed:
 
-1. A normal PenguiFlow inference can create an MLflow root trace with nested
-   LiteLLM spans.
+1. The original MLflow-instrumented experiment can create an MLflow root trace
+   with nested LiteLLM spans; this is historical parity evidence, not the target
+   runtime integration.
 2. A trace can be projected into an MLflow Evaluation Dataset record.
 3. Nested PenguiFlow evidence survives MLflow dataset write and readback.
 4. Native short-term-memory context is available in
@@ -102,6 +158,11 @@ The enterprise v2 feasibility work confirmed:
 6. `mlflow.genai.evaluate()` can consume a trace-derived MLflow dataset, invoke
    an agent through `predict_fn`, execute a custom scorer, persist an evaluation
    run, and link a new inference trace.
+7. A raw OTel agent span and native PenguiFlow LLM spans can preserve one parent-
+   child trace without `mlflow.trace()` or `mlflow.litellm.autolog()`.
+8. The existing four-case Enterprise v2 policy suite still produces non-empty
+   PenguiFlow trajectories and completes MLflow dataset/evaluation processing
+   after runtime trace emission moves to OTel.
 
 The successful native feasibility run produced:
 
@@ -114,6 +175,11 @@ The feasibility scripts are:
 
 - `examples/planner_enterprise_agent_v2/evals/mlflow_trace_dataset_feasibility.py`
 - `examples/planner_enterprise_agent_v2/evals/mlflow_learning_plane_feasibility.py`
+
+These scripts and their direct finalized-execution projections are exploratory
+evidence, not target public APIs. Production work keeps current evaluation
+schemas and introduces only the thin source-reference translation required to
+associate an OTel runtime trace with existing evaluation evidence.
 
 ## 4. What Is Not Yet Proven
 
@@ -130,6 +196,12 @@ It does not yet prove:
 - complete source-record-run-prediction-scorer lineage;
 - reproducible candidate runtime configuration;
 - operation with another agent framework.
+- application-configured OTLP export and inspection in a non-MLflow trace
+  backend;
+- complete autolog parity for repair, reflection, summarization, fallback, and
+  failure paths;
+- bounded/redacted initial-system-prompt and request/response capture under
+  production content policies.
 
 These are parity and hardening gates, not blockers to the selected architecture.
 
@@ -138,11 +210,13 @@ These are parity and hardening gates, not blockers to the selected architecture.
 | Concern | Owner |
 |---|---|
 | Agent construction and execution | Local PenguiFlow evaluation callable |
+| Runtime agent and LLM trace emission | PenguiFlow OTel autolog instrumentation |
+| OTel SDK, sampling, export, and operational trace storage | Deploying application |
 | StateStore isolation and trajectory persistence | Local PenguiFlow evaluation callable |
 | Native trajectory interpretation | PenguiFlow metric/helper code |
 | Domain success criteria | Agent evaluation package |
 | Local JSONL and local reports | `LocalEvaluationBackend` |
-| MLflow datasets, runs, traces, assessments | `MLflowEvaluationBackend` |
+| MLflow datasets, evaluation runs, prediction evidence, assessments | `MLflowEvaluationBackend` |
 | Evaluation trace-to-case projection and redaction | Agent evaluation package |
 | Investigation trajectory and learning lifecycle | Separate Learning Plane provider |
 | Runtime conversation memory | Agent runtime StateStore, not MLflow |
@@ -189,7 +263,10 @@ by configured metrics.
 ```python
 @dataclass
 class PredictionResult:
-    status: Literal["ok", "paused", "failed", "cancelled"]
+    status: Literal[
+        "completed", "paused", "failed", "timed_out", "cancelled",
+        "interrupted", "unknown",
+    ]
     answer: str | None
     route: str | None
     trajectory: Mapping[str, Any] | None
@@ -245,9 +322,10 @@ Responsibilities:
 
 Candidate skill comparison is a separate local configuration concern. A
 candidate arm may make the exact skill available through PenguiFlow's existing
-`skills_provider` machinery or a small in-memory overlay; the backend does not
+`skills_provider` machinery or a small in-memory overlay only when that overlay
+uses the same provider projection used for delivery; the backend does not
 interpret or persist the skill. The Learning Plane provider separately binds
-the candidate digest to use proof.
+the candidate digest and provider projection to use proof.
 
 Both backends use the same local callable semantics. This is the consistency
 boundary: the same inputs and local execution profile must produce comparable
@@ -338,12 +416,15 @@ tags
   split/cohort/case type/schema and metric versions
 
 source
-  source MLflow trace ID
+  source operational trace reference (OTel after migration)
   native framework trace ID
 ```
 
 Avoid embedding complete native trajectories when scorers only need a small
 projection. Retain an immutable trace/artifact reference for deeper inspection.
+An OTel trace ID must not be labeled or submitted as an MLflow trace ID. A thin
+source-reference adapter maps backend-specific trace identity into the existing
+source metadata fields without changing evaluation case or scorer schemas.
 
 ## 11. Evaluation-Case Projection and Replay Context
 
@@ -370,8 +451,24 @@ known callback fields is insufficient for security and reproducibility.
 - Keep current feasibility scripts as throwaway executable references.
 - Record known dataset/run IDs in this decision document.
 - Stop extending the current trace-to-JSONL-to-MLflow round-trip path.
+- Record OTel autolog findings and treat direct feasibility projectors as
+  disposable evidence rather than production evaluation APIs.
 
 Exit criterion: current native MLflow feasibility remains reproducible.
+
+### Runtime tracing prerequisite: OTel autolog parity
+
+- Add `penguiflow.otel.autolog()` with MLflow-like enable, disable, silent, and
+  input/output controls.
+- Instrument `ReactPlanner.run()` and the existing native `LLMTraceSink` seam.
+- Remove direct MLflow trace emission from the recommended runtime path.
+- Capture the initial effective system prompt according to content policy.
+- Preserve current evaluation schemas through a thin OTel source-reference
+  adapter.
+
+Exit criterion: one Enterprise v2 run produces one OTel root span with nested
+native LLM spans, useful bounded debugging content, and no MLflow runtime tracing
+calls; existing local and MLflow evaluation behavior remains unchanged.
 
 ### Phase 1: Consolidate local evaluation execution
 
@@ -435,6 +532,14 @@ penguiflow/evals/
     mlflow.py             # Optional MLflow-native backend
 ```
 
+Runtime tracing remains outside `penguiflow/evals/`:
+
+```text
+penguiflow/
+  otel.py                 # minimal autolog public surface
+  llm/tracing.py          # existing LLMTraceSink plus OTel sink
+```
+
 MLflow imports must remain inside optional adapter code. Core planner and local
 evaluation must not require MLflow.
 
@@ -469,13 +574,16 @@ only after local and MLflow parity checks pass.
 | Risk | Mitigation |
 |---|---|
 | MLflow lock-in | Keep local execution, metrics, and local backend free of MLflow types |
+| Runtime tracing couples to MLflow | Emit through OTel API; keep MLflow imports inside evaluation adapter |
+| Prompt or response leakage | Explicit content switch, redaction, size limits, and no hidden reasoning |
+| OTel ID mislabeled as MLflow ID | Translate through typed source-reference adapter |
 | Context or tool-output leakage | Enforced allowlist projection before dataset publication |
 | Dataset mutation | Pin revision/content digest in evaluation evidence |
 | Missing prediction trajectory | Fail prediction explicitly after persistence wait/readback |
 | Async event-loop conflicts | Backend owns async boundary; no per-case nested `asyncio.run()` |
 | Metric divergence | One shared implementation with local and MLflow wrappers |
 | Trace identity confusion | Distinguish source, native prediction, and MLflow prediction IDs |
-| Candidate is not actually applied | Local skill overlay plus Learning Plane candidate-use proof |
+| Candidate is not actually applied | Delivery-equivalent provider projection plus Learning Plane candidate-use proof |
 | Invalid holdout evidence | Independent source IDs and non-overlapping cohort manifests |
 | Over-generalization | Delay extra provider interfaces until another backend requires them |
 
@@ -492,13 +600,22 @@ Refactor is complete when:
    adapters with equivalent results.
 6. Middle-turn replay preserves required conversation context without hidden
    StateStore manipulation.
-7. Failed, paused, cancelled, and missing-trajectory cases are explicit.
+7. Completed, failed, paused, timed-out, cancelled, interrupted, unknown, and
+   missing-trajectory cases are explicit.
 8. Every MLflow case links source trace, dataset record/revision, evaluation run,
    prediction trace, scorer version, and model/config fingerprint.
 9. Local JSONL and MLflow datasets are backend-native persistence formats; no
    mandatory round-trip through both exists.
 10. MLflow evaluation works without Learning Plane configuration and returns
     stable references usable by an optional Learning Plane provider.
+11. `penguiflow.otel.autolog()` produces an agent root span and nested native LLM
+    spans without MLflow runtime tracing APIs.
+12. Autolog records the initial effective system prompt when content capture is
+    enabled and records only digest/size/version metadata when disabled.
+13. Runtime OTel migration does not change current evaluation case, prediction,
+    score, dataset, or metric contracts.
+14. OTel and native trace references remain distinguishable from MLflow
+    evaluation object identifiers.
 
 ## 17. Non-Goals
 
@@ -513,11 +630,17 @@ Refactor is complete when:
   third backend exists.
 - Removing local JSONL/CI support.
 - Treating the current one-case feasibility result as production validation.
+- Making MLflow the runtime trace exporter or requiring MLflow for inference.
+- Building a general runtime tracing provider hierarchy before a second runtime
+  implementation requires it.
 
 ## 18. Final Architecture
 
 ```mermaid
 graph LR
+    A[Agent runtime] --> O[OTel autolog spans]
+    O --> T[Application OTel backend]
+
     C[Evaluation cases] --> L[LocalEvaluationBackend]
     D[MLflow Evaluation Dataset] --> M[MLflowEvaluationBackend]
 
@@ -535,4 +658,5 @@ graph LR
 ```
 
 Consistency lives in local execution and metric semantics. Persistence and
-evaluation tracking remain backend-native.
+evaluation tracking remain backend-native. Runtime observability is OTel-native
+and does not select or alter the evaluation backend.
