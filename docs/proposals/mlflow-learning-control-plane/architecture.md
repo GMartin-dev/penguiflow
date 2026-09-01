@@ -328,6 +328,7 @@ AgentEvaluationPackage
   package_ref
   package_digest
   source_trace_projector_ref
+  source_trace_projector_digest
   dataset_schema_ref
   evaluation_entrypoint_ref
   scorer_refs[]
@@ -340,6 +341,13 @@ may differ across agents and frameworks. The Learning Control Plane records the
 package digest and case-set snapshot but does not interpret agent-specific rows.
 The same package and MLflow evaluation backend can run ordinary evaluations
 without investigation attachments or a Learning Control Plane.
+
+The package may also project authorized evidence into a candidate evaluation
+case when a proposed skill's claimed behavior is not represented by existing
+cases. Projection is mechanical, not admission: the agent's domain owner must
+approve the expectation, scorer applicability, replayability, and privacy
+classification before the case enters a versioned evaluation dataset. Generated
+expectations cannot serve as blocking ground truth without trusted validation.
 
 ### 5.3 Evidence Snapshot
 
@@ -460,6 +468,21 @@ many-source-to-one-case mapping.
 Missing feedback is `unknown`, not success. Evidence used to discover a skill
 does not by itself prove that skill is better.
 
+Every skill proposal records an evaluation coverage disposition:
+
+- `sufficient`: existing cases represent the claimed behavior;
+- `extension_required`: the agent evaluation package must project one or more
+  candidate cases and the domain owner must admit them before promotion; or
+- `not_projectable`: the behavior cannot be replayed or scored reliably, so the
+  first iteration does not promote the skill or claim the behavior is fixed.
+
+An admitted case records source-evidence references, stable case identity,
+projector reference and digest, expectation status, and dataset revision.
+Cases derived from evidence used to generate a skill may prove reproduction and
+remediation, but cannot count as independent holdout evidence. When admitted
+cases change regression coverage, affected active skills invoke the selected
+compatibility policy.
+
 ## 9. Skill Generation and Evaluation
 
 ### Discovery
@@ -491,6 +514,7 @@ supported, temperature, top-p, and other sampling or decoding settings.
 
 Required evidence:
 
+- Accepted evaluation coverage disposition and relevant case references.
 - Per-case baseline and candidate results.
 - Exact candidate skill digest/version.
 - Per-case proof that the exact skill digest was selected or injected in the
@@ -574,6 +598,8 @@ review state, and active-version semantics.
 First-iteration policy is intentionally simple:
 
 - Minimum discovery and evaluation samples.
+- Accepted evaluation coverage disposition; `extension_required` and
+  `not_projectable` block promotion.
 - Required scorer thresholds.
 - Safety and policy vetoes.
 - No missing required case results.
@@ -602,6 +628,9 @@ Automatic activation, canary rollout, and autonomous advancement are deferred.
   Constrain generation, scan skill content, and require human confirmation.
 - **Dataset drift:** bind both arms to the same frozen evaluation cohort manifest
   and reject case-set or source-mapping mismatch.
+- **Coverage gaps and self-validation:** missing relevant cases are `unknown`,
+  not improvement. Domain owners admit projected cases, and discovery-derived
+  cases cannot serve as independent holdout proof.
 - **Artifact substitution:** evaluation, approval, and delivery must reference
   the same canonical skill digest.
 - **Untrusted feedback or scorers:** verify authenticated execution identity and
@@ -696,13 +725,15 @@ support or a profile selection.
 1. Agent and outcome connectors publish runtime evidence and authorized outcome snapshots.
 2. Learning Plane provider publishes portable investigation trajectories through the selected profile.
 3. Learning Control Plane selects recurring procedures and source trace refs.
-4. Procedure mining proposes one or more bounded advisory skills.
-5. Agent evaluation package materializes later cases as an MLflow dataset.
-6. Registered executor runs stable baseline and stable-agent-plus-skill variants.
-7. Managed and agent-owned scorers write assessments to MLflow.
-8. Learning Control Plane applies evidence and safety gates.
-9. Passing skill becomes a proposal awaiting required approval and confirmation.
-10. Learning Plane provider delivers the exact confirmed skill and records receipt.
+4. Each proposed improvement receives a coverage disposition; when required, the
+   agent evaluation package projects candidate cases and the domain owner admits them.
+5. Procedure mining proposes one or more bounded advisory skills.
+6. Agent evaluation package materializes later cases as an MLflow dataset.
+7. Registered executor runs stable baseline and stable-agent-plus-skill variants.
+8. Managed and agent-owned scorers write assessments to MLflow.
+9. Learning Control Plane applies evidence and safety gates.
+10. Passing skill becomes a proposal awaiting required approval and confirmation.
+11. Learning Plane provider delivers the exact confirmed skill and records receipt.
 
 ## 16. Delivery Phases
 
@@ -760,11 +791,13 @@ First iteration succeeds when:
 3. Learning Control Plane selects source refs without parsing PenguiFlow-native
    trajectories or dataset rows.
 4. Agent evaluation package materializes and evaluates a middle-turn case from
-   a frozen evaluation cohort manifest.
+   a frozen evaluation cohort manifest, and can project an authorized source
+   trace into a domain-admitted case with projector lineage.
 5. One existing domain scorer runs through the MLflow path.
 6. Baseline and candidate differ only by exact skill version.
 7. Candidate-use, changed-case, improvement, and regression evidence are
-   explicit, with preregistered sample, effect, and repeat-run policy.
+   explicit, with accepted coverage disposition and preregistered sample,
+   effect, and repeat-run policy. Discovery-derived cases are not holdout proof.
 8. Passing evaluation creates a proposal, not automatic activation.
 9. Approval and confirmation identify exact skill digest, evidence snapshot,
    scope, reviewer, and decision.

@@ -42,14 +42,14 @@ assessment, prediction-trace, or lineage operations.
 | **B. OTel transport to MLflow** | OTel API and OTLP | Complete MLflow trace output within tested limits; no native OTLP attachment | Trace destination and complete downstream learning workflow | Low to medium |
 | **C. OTel plus external evidence** | OTel metadata plus durable evidence write | External immutable object or existing StateStore | Dataset projection onward | Medium to high |
 | **D. Owned evidence ledger** | Durable evidence event and artifact; OTel is an observability projection | Platform-owned ledger and artifact store | Downstream learning projection | Highest |
-| **E. Dual runtime write** | OTel and MLflow tracing | Ambiguous unless one side is explicitly subordinate | One of two runtime representations plus downstream workflow | Highest and duplicated |
+| **E. Bounded dual export** | MLflow tracing plus optional OTLP | MLflow trace attachment; OTLP is subordinate observability | Runtime evidence and complete downstream learning workflow | Medium to high |
 
 ## Trade-Off Matrix
 
 Ratings are relative. `High` means option provides more of named property, not
 that option is universally better.
 
-| Decision property | A. MLflow-native | B. OTel to MLflow | C. OTel + external evidence | D. Evidence ledger | E. Dual write |
+| Decision property | A. MLflow-native | B. OTel to MLflow | C. OTel + external evidence | D. Evidence ledger | E. Bounded dual export |
 |---|---|---|---|---|---|
 | Delivery speed | High | Medium | Low | Lowest | Low |
 | Native trace-to-attachment UX | High | Low | Low | Low | High on MLflow copy |
@@ -60,10 +60,10 @@ that option is universally better.
 | Existing enterprise OTel integration | Low | High | High | Medium | High |
 | Evidence survival independent of trace sampling | Medium | Low unless separately guaranteed | High | High | Medium |
 | Large-payload storage efficiency | Medium | Low | High | High | Medium |
-| Single access, retention, and deletion boundary | High | High | Low | Low | Lowest |
+| Single access, retention, and deletion boundary | High | High | Low | Low | Medium when metadata-only |
 | Customer deployment flexibility | Low to medium | Medium to high | High | High | Medium |
-| Cross-system reconciliation burden | Low | Medium | High | High | Highest |
-| Support and on-call surface | Low | Medium | High | Highest | Highest |
+| Cross-system reconciliation burden | Low | Medium | High | High | Low while OTLP is subordinate |
+| Support and on-call surface | Low | Medium | High | Highest | Medium |
 | Future runtime-backend option value | Low | Medium | High | Highest | Medium |
 
 ## Option Analysis
@@ -205,32 +205,45 @@ learning or compliance consumers, Option D has strongest fit.
 Option D is premature when MLflow is the only funded consumer or portability is
 not backed by a migration, regulatory, or multi-product requirement.
 
-### E. Dual Runtime Write
+### E. Bounded Dual Export
 
 ```text
 Runtime -> OTel trace
         -> MLflow trace + attachment
 ```
 
+This is an optional extension of Option A, not a second evidence authority.
+MLflow remains authoritative for runtime learning evidence. OTLP is disabled by
+default through the MVP and may be enabled afterward only when the deployment
+configures an OTel provider and exporter for a named operational destination. A
+missing exporter is a no-op. OTLP failure neither blocks the customer response
+nor changes MLflow evidence eligibility.
+
+The default OTLP projection contains operational metadata, content digests, and
+the stable PenguiFlow trace ID used to correlate distinct OTel and MLflow trace
+IDs. Full prompts, responses, tool output, and trajectory content require
+explicit opt-in plus independent redaction, access, retention, and deletion
+policy.
+
 **Value created**
 
 - Preserves native MLflow attachments and independent OTel visibility.
-- Can support a bounded migration or feasibility comparison.
+- Reuses an existing operational telemetry destination without moving learning
+  authority or projection.
 
 **Cost accepted**
 
-- No atomic commit exists across destinations.
-- Partial success, duplicate records, divergent sampling, and inconsistent
-  deletion are normal failure modes.
-- Instrumentation, storage, support, and incident diagnosis are duplicated.
-- One source must still be declared authoritative.
+- No atomic commit or completeness guarantee exists across destinations.
+- Instrumentation, export overhead, support, and incident diagnosis increase.
+- Full-content export duplicates sensitive data and its governance obligations.
+- OTLP adds no learning durability because MLflow remains authoritative.
 
 **Decision condition**
 
-Option E fits a time-bounded migration or measurement exercise when both outputs
-are temporarily required and reconciliation is funded.
-
-It does not provide a stable authority model by itself.
+Option E fits after the MVP when a deployment has a named OTLP observability
+consumer and accepts the added operating cost. It is unnecessary when OTLP is
+enabled only for abstract portability. Reconciliation becomes required if a
+future decision treats OTLP output as learning evidence.
 
 ## Marginal Decoupling Test
 
@@ -285,7 +298,7 @@ Partial decoupling has limited value when:
 | Runtime outage isolation and customer-controlled observability | C. OTel plus external evidence |
 | Independent evidence retention, access, or large-object economics | C. OTel plus external evidence |
 | Multi-consumer evidence platform or credible downstream vendor exit | D. Owned evidence ledger |
-| Temporary migration or empirical comparison | E. Bounded dual write |
+| Native MLflow learning evidence plus required operational OTLP visibility | E. Bounded dual export |
 
 ## Invariants Across Options
 

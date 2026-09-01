@@ -102,13 +102,15 @@ Deterministic **Workflows** are the next candidate surface if the skill loop pro
 
 1. **Find on one cohort; judge on another.** Evidence used to discover a skill cannot also prove it works. That would grade the system's own homework.
 2. **Test on the future, not the past.** Mine in one time window and validate on a later, frozen window.
-3. **Change one thing.** Baseline and candidate use the same agent, model, tools, configuration, and cases. The intended difference is the exact skill.
-4. **Prove the skill was used.** A candidate that was never selected, changes no case, or improves no case is rejected.
-5. **Fail closed.** Missing results, scorer failures, mismatched cases, or blocking regressions stop promotion.
-6. **Keep judgment with the domain.** Agent teams own business scorers. Probabilistic MLflow judges may assist but are not the sole promotion authority.
-7. **Bind every decision to the exact asset.** Evaluation, confirmation, and delivery reference the same immutable skill digest. MLflow review is evidence only; the Learning Control Plane authenticates the reviewer, verifies their role, and records the authoritative decision.
-8. **Verify the handoff.** Before delivery, the provider rechecks live target policy and customer scope, installs the exact confirmed version, and records a scope-bound receipt.
-9. **Keep the off-switch.** Every delivered skill can be deactivated by the platform operator with a receipt. Off-switch behavior must be selected and tested before delivery exits. If evidence cannot be verified, learning stops while production agents keep running.
+3. **Require relevant coverage.** Every skill proposal identifies evaluation cases representing its claimed improvement. When coverage is missing, the agent-owned evaluation package proposes cases from authorized evidence and the domain owner admits them before promotion.
+4. **Do not self-validate.** A case derived from skill-discovery evidence may prove reproduction and remediation, but not generalization; independent later cases remain required.
+5. **Change one thing.** Baseline and candidate use the same agent, model, tools, configuration, and cases. The intended difference is the exact skill.
+6. **Prove the skill was used.** A candidate that was never selected, changes no case, or improves no case is rejected.
+7. **Fail closed.** Missing results, scorer failures, mismatched cases, or blocking regressions stop promotion.
+8. **Keep judgment with the domain.** Agent teams own business scorers and evaluation-case admission. Probabilistic MLflow judges may assist but are not the sole promotion authority.
+9. **Bind every decision to the exact asset.** Evaluation, confirmation, and delivery reference the same immutable skill digest. MLflow review is evidence only; the Learning Control Plane authenticates the reviewer, verifies their role, and records the authoritative decision.
+10. **Verify the handoff.** Before delivery, the provider rechecks live target policy and customer scope, installs the exact confirmed version, and records a scope-bound receipt.
+11. **Keep the off-switch.** Every delivered skill can be deactivated by the platform operator with a receipt. Off-switch behavior must be selected and tested before delivery exits. If evidence cannot be verified, learning stops while production agents keep running.
 
 Investigation records contain only allowlisted or redacted content. Native evaluation datasets have a separate authorization, redaction, and secret-check boundary. Trace text, tool output, feedback, generated skills, and scorer claims are treated as untrusted; blocking scorer identity and version are verified independently.
 
@@ -124,6 +126,7 @@ External learning execution must prove isolation, bounded access, and controlled
 | Framework choice remains open | Safe evaluation may require isolated or read-only tools |
 | Full trail from source run to delivered skill | MLflow capabilities vary by deployment profile |
 | Learning failures do not interrupt production | First release learns advisory skills only |
+| Trace-derived cases preserve production evidence | Novel behavior remains unproven until a domain-reviewed case represents it |
 
 The design favors controlled improvement over autonomy. It does not initially optimize prompts, parameters, routing, permissions, code, or executable workflows.
 

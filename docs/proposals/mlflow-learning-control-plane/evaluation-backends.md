@@ -445,6 +445,12 @@ parse rendered LLM prompts.
 Projection must use an allowlist or project-defined schema. A fixed denylist of
 known callback fields is insufficient for security and reproducibility.
 
+When projection supplies a candidate case for an evaluation coverage gap, it
+also records stable case identity, source-evidence references, projector identity
+and digest, intended dataset revision, and expectation status. The backend
+materializes and validates the projected row; the agent's domain owner, not the
+backend or Learning Control Plane, approves its expectation and admission.
+
 ## 12. Refactor Phases
 
 ### Phase 0: Preserve feasibility evidence
