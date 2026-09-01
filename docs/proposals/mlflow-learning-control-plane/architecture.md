@@ -4,18 +4,19 @@
 - **Date:** 2026-08-27
 - **First iteration:** Advisory Agent Skills only
 - **Related:**
-  [Framework-Agnostic Learning Control Plane](./FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md),
-  [Learning Plane skill first](./Learning%20Plane%20skill%20first.md),
-  [Dual Local and MLflow Evaluation Backends](./DUAL_LOCAL_MLFLOW_EVALUATION_BACKENDS.md),
-  [Learning Plane Evidence and Reusable Lessons](./LEARNING_PLANE_EVIDENCE_AND_REUSABLE_LESSONS.md)
+  [Framework-Agnostic Learning Control Plane](../FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md),
+  [Learning Plane skill first](../Learning%20Plane%20skill%20first.md),
+  [Dual Local and MLflow Evaluation Backends](./evaluation-backends.md),
+  [Learning Plane Evidence and Reusable Lessons](./research-evidence.md)
 
 ## 1. Decision
 
 Build a framework-agnostic **Learning Control Plane** with **MLflow as the
 system of record for MLflow-native learning evidence**.
 
-MLflow is the common evidence intermediary: it stores traces, curated datasets,
-scorer assessments, evaluation runs, prediction traces, and their references.
+MLflow is the common downstream evidence intermediary: it stores curated
+datasets, scorer assessments, evaluation runs, prediction traces, and typed
+source-evidence references.
 The framework MLflow evaluation backend is independently useful and does not
 require the Learning Control Plane.
 The Learning Control Plane remains the workflow and authorization authority. It
@@ -51,9 +52,15 @@ advisory skills because broader optimization surfaces require deeper framework
 coupling.
 
 `InvestigationTrajectoryV1` is the only enforced cross-framework payload
-schema. The compact trace metadata index is a transport/query contract. Native
+schema. Its digest-bound evidence reference and compact query index are
+transport contracts. Native
 traces, datasets, evaluation packages, scorers, metrics, and adapter internals remain
 framework- or agent-owned.
+
+Runtime evidence capture is deployment-selectable. MLflow-native attachment and
+decoupled evidence profiles preserve the same evidence contract and converge on
+MLflow-backed datasets, evaluations, assessments, and lineage. The selection
+criteria are documented in [Runtime Evidence Architecture Decision](./runtime-evidence-architecture-decision.md).
 
 ## 2. Confirmed Feasibility
 
@@ -116,7 +123,7 @@ graph LR
     P --> A[Agent execution]
     E --> M[MLflow evaluation evidence]
     X[Agent runtime] --> F[Optional Learning Plane provider]
-    F --> T[Investigation trajectory attachments]
+    F --> T[Canonical investigation evidence]
     M --> L[Learning Control Plane]
     T --> L
     M --> J[Automatic MLflow LLM judges]
@@ -129,7 +136,8 @@ graph LR
 
 | Concern | Owner |
 |---|---|
-| Traces, datasets, assessments, evaluation runs, lineage | MLflow |
+| Evaluation datasets, assessments, runs, prediction traces, lineage | MLflow |
+| Canonical raw investigation evidence | Store selected by runtime evidence profile |
 | Runtime memory and operational state | Agent runtime and native StateStore |
 | Raw business outcomes | Domain outcome system |
 | Learning-relevant outcome snapshot | MLflow assessment |
@@ -173,25 +181,43 @@ supported framework publishes one minimal snippet for each integration.
 Learning Control Plane to find recurring procedures, failures, and successful
 patterns across supported agents.
 
-Learning Plane providers serialize every projection as canonical JSON in an
-MLflow Attachment
-with content type `application/json`. The root-span output key
-`learning.investigation_trajectory` contains the attachment reference. The trace
-metadata records the attachment digest and a small string-valued index: schema,
-agent, provider, scope, status, execution fingerprint, intent class, step
-signature, and outcome/assessment presence. The Learning Control Plane queries
-this index, then reads the attachment; it does not scan attachments to discover
-candidates.
+Learning Plane providers serialize every projection as canonical JSON with
+content type `application/json` and publish a digest-bound evidence reference.
+The selected runtime evidence profile may store those bytes as an MLflow
+Attachment, as complete bounded MLflow trace output, or in an independently
+operated immutable store. Trace-output storage is valid only when the selected
+profile proves that sampling, truncation, and retention cannot remove required
+learning evidence. Its bounded query
+index records schema, agent, provider, scope, status, execution fingerprint,
+intent class, step signature, and outcome/assessment presence. The Learning
+Control Plane queries the index, resolves the authenticated evidence reference,
+and verifies its digest; it does not scan payloads to discover candidates.
+
+```text
+InvestigationEvidenceRef
+  evidence_id
+  schema_version
+  content_digest
+  storage_kind
+  object_ref
+  source_trace_ref
+  scope_ref
+  redaction_profile
+```
+
+MLflow-native and decoupled profiles must preserve the same identity, integrity,
+scope, redaction, and retrieval semantics. Profile-specific storage and
+publication mechanics remain below this contract.
 
 ```text
 InvestigationTrajectoryV1
   schema_version
   investigation_id
   source_trace_ref
+    kind
     deployment_ref
-    experiment_id
-    mlflow_trace_id
-    native_trace_id
+    trace_id
+    extensions
   agent_ref
   provider_ref
   scope_ref
@@ -266,10 +292,10 @@ The shape deliberately follows PenguiFlow's proven `Trajectory`,
 Other framework adapters map equivalent native concepts into the same topology;
 framework-only data stays under namespaced `extensions`.
 
-Required fields are identity, source MLflow trace, agent, provider, scope,
+Required fields are identity, typed source trace reference, agent, provider, scope,
 start time, status, execution fingerprint, request, steps, and redaction profile.
-`completed_at`, native trace ID, session, parents, intent, events, outcomes, and
-assessments are optional; their arrays may be empty. One attachment represents
+`completed_at`, session, parents, intent, events, outcomes, and assessments are
+optional; their arrays may be empty. One canonical evidence object represents
 one native agent run. Session and parent investigation references connect
 multi-turn and multi-agent runs without nesting framework-native traces. Status
 uses `completed`, `paused`, `failed`, `timed_out`, `cancelled`, `interrupted`,
@@ -280,17 +306,17 @@ model, tool, retrieval, handoff, agent, parallel, background, final, or custom
 work. Side effect uses `none`, `read`, `write`, `external`, or `unknown`.
 
 Content-bearing fields use allowlisted JSON, bounded redacted summaries, or
-artifact references according to `redaction_profile`. The attachment excludes
+artifact references according to `redaction_profile`. The evidence object excludes
 credentials, secrets, unrestricted customer content, and raw chain-of-thought;
 `reasoning_summary` is an optional provider-generated summary, never raw hidden
 reasoning.
 
 This projection supports investigation. It is not a replay format, evaluation
-dataset, scorer input contract, or replacement for the native MLflow trace.
+dataset, scorer input contract, or replacement for the native runtime trace.
 
 The Learning Control Plane may derive bounded, redacted episodic Markdown or
-sequence diagrams from the JSON attachment for skill discovery. These derived
-representations link back to the attachment digest but are not canonical
+sequence diagrams from the canonical JSON for skill discovery. These derived
+representations link back to the evidence digest but are not canonical
 evidence or framework-provider responsibilities.
 
 ### 5.2 Agent Evaluation Package
@@ -593,7 +619,7 @@ contexts or customer-derived skill references are stored in MLflow.
 
 ## 14. PenguiFlow Delta
 
-[Dual Local and MLflow Evaluation Backends](./DUAL_LOCAL_MLFLOW_EVALUATION_BACKENDS.md)
+[Dual Local and MLflow Evaluation Backends](./evaluation-backends.md)
 defines the standalone evaluation work. PenguiFlow is local-first today. Two
 separate product deltas are required.
 
@@ -608,7 +634,7 @@ Standalone `MLflowEvaluationBackend`:
 
 Opt-in `PenguiFlowLearningPlaneProvider`:
 
-1. Portable `InvestigationTrajectoryV1` projector and attachment publisher.
+1. Portable `InvestigationTrajectoryV1` projector and digest-bound evidence publisher for the selected runtime profile.
 2. Framework-native candidate skill overlay and exact-use proof.
 3. Confirmed skill delivery and delivery receipts.
 
@@ -629,7 +655,6 @@ Learning Plane participation is separately enabled:
 
 ```python
 provider = PenguiFlowLearningPlaneProvider(
-    evaluation_backend=backend,
     investigation_projector=investigation_projector,
 )
 ```
@@ -637,8 +662,9 @@ provider = PenguiFlowLearningPlaneProvider(
 Final public module paths are fixed during Phase 0. Both implementations remain
 open for inspection.
 
-Other framework integrations follow the same small pattern. For example, a
-standalone LangChain integration remains one line:
+Other framework integrations follow the same small pattern. A selected runtime
+profile supplies its native evidence publisher. For example, the MLflow-native
+profile can retain LangChain autologging:
 
 ```python
 mlflow.langchain.autolog()
@@ -657,16 +683,18 @@ async def invoke(agent, inputs, projector):
     return result
 ```
 
-`attach_investigation_trajectory()` is shared Learning Plane SDK logic. It
+For this profile, `attach_investigation_trajectory()` is shared Learning Plane SDK logic. It
 serializes and hashes `InvestigationTrajectoryV1`, writes the query index, and
 sets the JSON `Attachment` as the span output. MLflow cannot add attachments to
 an already completed trace, so publication must happen before this wrapper span
-ends. This is adapter-author guidance, not formal LangChain support.
+ends. Decoupled profiles publish the same canonical bytes and reference without
+altering an MLflow span. These are adapter-author examples, not formal LangChain
+support or a profile selection.
 
 ## 15. Learning Cycle
 
-1. Agent and outcome connectors publish traces and assessments to MLflow.
-2. Learning Plane provider publishes portable investigation trajectories.
+1. Agent and outcome connectors publish runtime evidence and authorized outcome snapshots.
+2. Learning Plane provider publishes portable investigation trajectories through the selected profile.
 3. Learning Control Plane selects recurring procedures and source trace refs.
 4. Procedure mining proposes one or more bounded advisory skills.
 5. Agent evaluation package materializes later cases as an MLflow dataset.
@@ -681,7 +709,7 @@ ends. This is adapter-author guidance, not formal LangChain support.
 ### Phase 0: Harden Feasibility
 
 - Resolve the project/runtime MLflow version mismatch and select the supported
-  deployment profile.
+  MLflow and runtime evidence profiles.
 - Prove standalone PenguiFlow MLflow dataset, prediction, and scorer execution.
 - Separately implement and validate the Learning Plane trajectory projection.
 - Enforce independent investigation and agent-dataset redaction boundaries.
@@ -724,10 +752,11 @@ ends. This is adapter-author guidance, not formal LangChain support.
 
 First iteration succeeds when:
 
-1. MLflow links source traces, curated dataset, evaluation run, prediction
-   traces, scorer results, and proposal evidence.
+1. MLflow links typed source-evidence references and digests, curated dataset,
+   evaluation run, prediction traces, scorer results, and proposal evidence.
 2. PenguiFlow source traces produce valid portable investigation trajectories
-   as canonical JSON attachments.
+   as canonical, digest-bound evidence through the selected runtime profile.
+   Telemetry sampling, truncation, and retention cannot remove required evidence.
 3. Learning Control Plane selects source refs without parsing PenguiFlow-native
    trajectories or dataset rows.
 4. Agent evaluation package materializes and evaluates a middle-turn case from
@@ -758,7 +787,9 @@ First iteration succeeds when:
 
 ## 18. Final Boundary
 
-- **MLflow stores learning evidence.**
+- **The selected runtime profile stores canonical raw investigation evidence.**
+- **MLflow stores projected datasets, evaluations, assessments, prediction
+  traces, and lineage.**
 - **Learning Control Plane curates evidence, proposes skills, coordinates
   evaluation, and governs approval.**
 - **Agent teams own evaluation datasets, evaluation configuration, expectations, and domain

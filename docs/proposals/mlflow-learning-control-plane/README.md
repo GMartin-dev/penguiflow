@@ -4,7 +4,7 @@
 
 **In one sentence:** after initial platform integration, the Learning Control Plane helps production agents improve from real usage through governed runtime assets, without repeated core-agent releases or exposing customers to unproven changes.
 
-**Decision:** use MLflow for native learning evidence, and a separate Learning Control Plane for authoritative proposal, approval, and delivery records.
+**Decision:** use MLflow for projected datasets, evaluations, scorers, assessments, prediction traces, and lineage, and a separate Learning Control Plane for authoritative proposal, approval, and delivery records. Runtime evidence authority remains deployment-selectable.
 
 For a run to become learning evidence, two signals are needed:
 
@@ -25,19 +25,22 @@ graph LR
 
 This is not an agent that rewrites itself. It learns bounded runtime assets that remain visible, versioned, reversible, and subordinate to existing permissions.
 
-![Governed AI agent evolution process](./Governed_AI_Agent_Evolution_Process.png)
+![Governed AI agent evolution process](./governed-agent-evolution.png)
 
 > Start with a sizing experiment, not a full build. If evidence contains too few repeated procedures, or outcomes are too weak to judge them, the learning loop is not worth operating. Standalone MLflow evaluation remains useful either way.
 
 # Architecture
 
-Control-plane discovery, evaluation, approval, and delivery run outside the live request path. Local provider instrumentation records evidence during execution, but agent requests never depend synchronously on Learning Control Plane availability. If the plane is unavailable, agents continue with their last confirmed configuration.
+Control-plane discovery, evaluation, approval, and delivery run outside the live request path. Runtime evidence capture is deployment-selectable and never depends synchronously on Learning Control Plane availability. All supported capture paths converge on MLflow-backed datasets, evaluations, scorers, assessments, and lineage. If the plane is unavailable, agents continue with their last confirmed configuration.
+
+The capture choice depends on runtime isolation, operating cost, customer environment, and evidence-governance needs. [Runtime Evidence Architecture Decision](./runtime-evidence-architecture-decision.md) records the trade-offs without selecting one implementation for every deployment.
 
 The following logical view isolates system boundaries and authoritative handoffs:
 
 ```mermaid
 flowchart TB
     A[Production agent runs]
+    R[Selected runtime<br/>evidence capture]
     O[Authorized outcome snapshots]
     M[MLflow evidence]
     C[Control Plane discovers<br/>and proposes skill]
@@ -46,7 +49,8 @@ flowchart TB
     H[Authorized human review]
     D[Provider rechecks policy<br/>and delivers confirmed skill]
 
-    A --> M
+    A --> R
+    R --> M
     O --> M
     M --> C
     C --> E
@@ -58,27 +62,25 @@ flowchart TB
 | Owner | Responsibility | Explicit boundary |
 | --- | --- | --- |
 | Agent teams | Run agents and define domain quality and policy | Domain knowledge stays with the team |
-| MLflow | Store traces, datasets, scores, artifacts, and lineage | Evidence store, not approval authority |
+| MLflow | Store projected datasets, scores, evaluation evidence, and lineage | Evidence store, not approval authority |
 | Learning Control Plane | Select candidates, coordinate evaluation, apply policy, and authorize delivery | Does not become an agent runtime |
 | Learning Plane provider | Publish portable evidence and deliver confirmed assets | Cannot bypass live permissions or scope |
 | Platform operator | Operate policy, reliability, receipts, incidents, and deactivation | Does not define domain success |
 
-Raw business outcomes remain in domain systems. Only authorized learning snapshots enter MLflow.
+Raw business outcomes remain in domain systems. Only authorized learning snapshots enter MLflow. Canonical raw runtime evidence remains in the store selected by the deployment's capture profile.
 
-Customer isolation is enforced through tenant-isolated MLflow resources or authenticated service-mediated access on every read and write. Tags and search metadata help locate evidence; they never establish access rights.
+Customer isolation is enforced through tenant-isolated resources or authenticated service-mediated access on every read and write, including the selected raw-evidence store and MLflow. Tags and search metadata help locate evidence; they never establish access rights.
 
 # The framework boundary
 
 Each supported framework will expose two separate integrations:
 
-- a **standalone MLflow evaluation backend** for tracing, datasets, prediction, scoring, and evaluation runs;
+- a **standalone MLflow evaluation backend** for datasets, prediction, scoring, and evaluation runs;
 - an optional **Learning Plane provider** that publishes a redacted investigation record, proves candidate use, and delivers confirmed assets.
 
 Teams can adopt MLflow evaluation without adopting continuous learning.
 
-Only one cross-framework payload schema is enforced: a portable investigation record, accompanied by bounded metadata used to find it. Native traces, replay behavior, evaluation packages, and domain scorers stay with the agent or framework that understands them.
-
-Each agent also binds its trace projection, dataset shape, evaluation configuration, expectations, and scorers in one versioned evaluation package. PenguiFlow evaluation uses local library primitives; any webhook, worker, or deployment connector needed by external learning orchestration is deployment-owned and outside the library. The Learning Control Plane coordinates the package and records its version; it does not interpret agent-specific test cases or scores.
+Portable contracts connect supported frameworks without centralizing their native traces, replay behavior, evaluation semantics, or domain judgment. [Technical architecture](./architecture.md) defines those boundaries.
 
 **Design principle:** the contracts carry the product, not PenguiFlow internals. After the first provider is proven, supporting another framework should require an adapter, not a central-service rewrite.
 
@@ -106,11 +108,11 @@ Deterministic **Workflows** are the next candidate surface if the skill loop pro
 6. **Keep judgment with the domain.** Agent teams own business scorers. Probabilistic MLflow judges may assist but are not the sole promotion authority.
 7. **Bind every decision to the exact asset.** Evaluation, confirmation, and delivery reference the same immutable skill digest. MLflow review is evidence only; the Learning Control Plane authenticates the reviewer, verifies their role, and records the authoritative decision.
 8. **Verify the handoff.** Before delivery, the provider rechecks live target policy and customer scope, installs the exact confirmed version, and records a scope-bound receipt.
-9. **Keep the off-switch.** Every delivered skill can be deactivated by the platform operator with a receipt. Propagation details remain Phase 3 implementation exploration and must be selected and tested before delivery exits. If evidence cannot be verified, learning stops while production agents keep running.
+9. **Keep the off-switch.** Every delivered skill can be deactivated by the platform operator with a receipt. Off-switch behavior must be selected and tested before delivery exits. If evidence cannot be verified, learning stops while production agents keep running.
 
 Investigation records contain only allowlisted or redacted content. Native evaluation datasets have a separate authorization, redaction, and secret-check boundary. Trace text, tool output, feedback, generated skills, and scorer claims are treated as untrusted; blocking scorer identity and version are verified independently.
 
-External learning orchestration may reach an agent through a deployment-owned endpoint, worker, or job. That connector must declare credentials, tool access, state-reset behavior, timeouts, and side-effect policy. Initial pilots should use simulated, isolated, or explicitly approved read-only tools.
+External learning execution must prove isolation, bounded access, and controlled side effects before production use.
 
 # Benefits and limitations
 
@@ -162,10 +164,11 @@ Each completed phase produces useful output; later phases depend on prior exit c
 Before production work begins, leadership must choose:
 
 1. **Deployment:** OSS MLflow with SQL storage or Databricks, plus one authoritative skill-package store.
-2. **Pilot:** first agent, domain, and customer scope with enough trusted outcomes.
-3. **Ownership:** domain scorer and approver teams, plus platform policy, operations, and incident owners.
-4. **Data policy:** retention, deletion, regional, and customer-content rules.
-5. **Operating model:** evaluation compute, model-judge spend, human-review capacity, and service support.
-6. **Go/no-go threshold:** preregistered numeric outcome coverage, recurrence and sample floors, minimum improvement, no-regression gates, review capacity, and stop condition.
+2. **Runtime evidence:** capture profile and authoritative raw-evidence store, using the linked decision criteria.
+3. **Pilot:** first agent, domain, and customer scope with enough trusted outcomes.
+4. **Ownership:** domain scorer and approver teams, plus platform policy, operations, and incident owners.
+5. **Data policy:** retention, deletion, regional, and customer-content rules.
+6. **Operating model:** evaluation compute, model-judge spend, human-review capacity, and service support.
+7. **Go/no-go threshold:** preregistered numeric outcome coverage, recurrence and sample floors, minimum improvement, no-regression gates, review capacity, and stop condition.
 
 The pilot succeeds when one recurring procedure becomes one measurably better, human-confirmed, scope-bound skill with a complete audit trail and a proven off-switch — without creating a dependency in the live customer request path.

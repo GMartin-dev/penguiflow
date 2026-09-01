@@ -4,7 +4,7 @@
 - **Date:** 2026-08-31
 - **Scope:** PenguiFlow evaluation execution and persistence
 - **Related:**
-  [Framework-Agnostic Learning Control Plane](./FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md)
+  [Framework-Agnostic Learning Control Plane](../FRAMEWORK_AGNOSTIC_LEARNING_CONTROL_PLANE.md)
 
 ## 1. Decision
 
@@ -50,11 +50,12 @@ Do not introduce separate dataset-provider, tracker, run-store, or orchestrator
 interfaces yet. Split those concerns only when a concrete mixed-backend use
 case requires it.
 
-Runtime tracing is a separate, narrower concern. PenguiFlow will emit runtime
-agent and LLM spans through OpenTelemetry, while MLflow remains the optional
-evaluation backend. Replacing MLflow runtime tracing must not change the shared
-evaluation contracts, dataset schemas, metric semantics, or backend ownership
-defined here.
+Runtime tracing is a separate, narrower concern. A deployment selects a runtime
+evidence profile with a typed source-evidence reference; MLflow remains the
+optional evaluation backend. Runtime profile selection must
+not change the shared evaluation contracts, dataset schemas, metric semantics,
+or backend ownership defined here. Selection trade-offs are documented in
+[Runtime Evidence Architecture Decision](./runtime-evidence-architecture-decision.md).
 
 ## 2. Why This Path
 
@@ -93,9 +94,9 @@ Standalone MLflow evaluation is useful without continuous learning. A separate
 publication, cohort curation, candidate-use proof, approval, and delivery are
 outside this refactor.
 
-### 2.4 Runtime tracing: match MLflow autolog with less coupling
+### 2.4 Optional OTel runtime profile
 
-The runtime integration should preserve the developer experience and useful
+When selected, the OTel runtime integration should preserve the developer experience and useful
 trace shape demonstrated by `mlflow.trace()` and `mlflow.litellm.autolog()`
 without making MLflow a runtime dependency. The minimal public surface is:
 
@@ -158,11 +159,11 @@ The enterprise v2 feasibility work confirmed:
 6. `mlflow.genai.evaluate()` can consume a trace-derived MLflow dataset, invoke
    an agent through `predict_fn`, execute a custom scorer, persist an evaluation
    run, and link a new inference trace.
-7. A raw OTel agent span and native PenguiFlow LLM spans can preserve one parent-
+7. The optional OTel profile can preserve one parent-
    child trace without `mlflow.trace()` or `mlflow.litellm.autolog()`.
 8. The existing four-case Enterprise v2 policy suite still produces non-empty
    PenguiFlow trajectories and completes MLflow dataset/evaluation processing
-   after runtime trace emission moves to OTel.
+   when runtime trace emission uses OTel.
 
 The successful native feasibility run produced:
 
@@ -210,8 +211,8 @@ These are parity and hardening gates, not blockers to the selected architecture.
 | Concern | Owner |
 |---|---|
 | Agent construction and execution | Local PenguiFlow evaluation callable |
-| Runtime agent and LLM trace emission | PenguiFlow OTel autolog instrumentation |
-| OTel SDK, sampling, export, and operational trace storage | Deploying application |
+| Runtime agent and LLM trace emission | Selected runtime evidence profile |
+| OTel SDK, sampling, export, and operational trace storage | Deploying application when OTel profile is selected |
 | StateStore isolation and trajectory persistence | Local PenguiFlow evaluation callable |
 | Native trajectory interpretation | PenguiFlow metric/helper code |
 | Domain success criteria | Agent evaluation package |
@@ -416,7 +417,7 @@ tags
   split/cohort/case type/schema and metric versions
 
 source
-  source operational trace reference (OTel after migration)
+  typed source operational trace or evidence reference
   native framework trace ID
 ```
 
@@ -456,7 +457,7 @@ known callback fields is insufficient for security and reproducibility.
 
 Exit criterion: current native MLflow feasibility remains reproducible.
 
-### Runtime tracing prerequisite: OTel autolog parity
+### Optional runtime profile: OTel autolog parity
 
 - Add `penguiflow.otel.autolog()` with MLflow-like enable, disable, silent, and
   input/output controls.
@@ -466,7 +467,7 @@ Exit criterion: current native MLflow feasibility remains reproducible.
 - Preserve current evaluation schemas through a thin OTel source-reference
   adapter.
 
-Exit criterion: one Enterprise v2 run produces one OTel root span with nested
+Exit criterion when this profile is selected: one Enterprise v2 run produces one OTel root span with nested
 native LLM spans, useful bounded debugging content, and no MLflow runtime tracing
 calls; existing local and MLflow evaluation behavior remains unchanged.
 
@@ -574,7 +575,7 @@ only after local and MLflow parity checks pass.
 | Risk | Mitigation |
 |---|---|
 | MLflow lock-in | Keep local execution, metrics, and local backend free of MLflow types |
-| Runtime tracing couples to MLflow | Emit through OTel API; keep MLflow imports inside evaluation adapter |
+| Runtime capture profile leaks into evaluation | Keep typed source references at the boundary and profile imports outside shared evaluation contracts |
 | Prompt or response leakage | Explicit content switch, redaction, size limits, and no hidden reasoning |
 | OTel ID mislabeled as MLflow ID | Translate through typed source-reference adapter |
 | Context or tool-output leakage | Enforced allowlist projection before dataset publication |
@@ -608,14 +609,15 @@ Refactor is complete when:
    mandatory round-trip through both exists.
 10. MLflow evaluation works without Learning Plane configuration and returns
     stable references usable by an optional Learning Plane provider.
-11. `penguiflow.otel.autolog()` produces an agent root span and nested native LLM
-    spans without MLflow runtime tracing APIs.
-12. Autolog records the initial effective system prompt when content capture is
-    enabled and records only digest/size/version metadata when disabled.
-13. Runtime OTel migration does not change current evaluation case, prediction,
-    score, dataset, or metric contracts.
-14. OTel and native trace references remain distinguishable from MLflow
-    evaluation object identifiers.
+11. Selected runtime capture profile produces a typed, retrievable source-evidence
+    reference without changing shared evaluation contracts, and telemetry
+    sampling cannot remove evidence required for evaluation.
+12. When OTel profile is selected, `penguiflow.otel.autolog()` produces an agent
+    root span and nested native LLM spans without MLflow runtime tracing APIs.
+13. When OTel profile is selected, content capture records bounded, redacted
+    content when enabled and only digest/size/version metadata when disabled.
+14. OTel, native, artifact, and MLflow trace references remain distinguishable
+    from MLflow evaluation object identifiers.
 
 ## 17. Non-Goals
 
@@ -638,8 +640,8 @@ Refactor is complete when:
 
 ```mermaid
 graph LR
-    A[Agent runtime] --> O[OTel autolog spans]
-    O --> T[Application OTel backend]
+    A[Agent runtime] --> O[Selected runtime evidence profile]
+    O --> T[Operational trace or evidence store]
 
     C[Evaluation cases] --> L[LocalEvaluationBackend]
     D[MLflow Evaluation Dataset] --> M[MLflowEvaluationBackend]
@@ -647,8 +649,8 @@ graph LR
     L --> P[Local run_one]
     M --> P
 
-    P --> A[Local agent + isolated StateStore]
-    A --> R[PredictionResult]
+    P --> X[Local agent + isolated StateStore]
+    X --> R[PredictionResult]
 
     R -->|Local run| LM[Local metric adapter]
     R -->|MLflow run| MS[MLflow scorer adapter]
@@ -658,5 +660,5 @@ graph LR
 ```
 
 Consistency lives in local execution and metric semantics. Persistence and
-evaluation tracking remain backend-native. Runtime observability is OTel-native
-and does not select or alter the evaluation backend.
+evaluation tracking remain backend-native. Runtime evidence capture is
+deployment-selectable and does not select or alter the evaluation backend.
