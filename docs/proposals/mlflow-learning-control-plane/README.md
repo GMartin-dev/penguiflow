@@ -6,6 +6,34 @@
 
 **Decision:** use MLflow for projected datasets, evaluations, scorers, assessments, prediction traces, and lineage, and a separate Learning Control Plane for authoritative proposal, approval, and delivery records. Runtime evidence authority remains deployment-selectable.
 
+# Start here
+
+You do not need to read every document. Use this guide to find the level of detail you need.
+
+| If you want to understand... | Read | What you will learn |
+| --- | --- | --- |
+| **What are we building and why?** | **This README** | The problem, proposed service, safety boundaries, benefits, limitations, and rollout plan. Start here. |
+| **What does leadership need to know?** | [Executive brief](./executive-brief.md) | A short, non-technical summary of the business value, guarantees, ownership model, and delivery stages. About a five-minute read. |
+| **How will the whole system work?** | [Technical architecture](./architecture.md) | The detailed design: components, responsibilities, data contracts, evaluation lifecycle, approvals, security, and delivery. Read this after the README. |
+| **How will agents be tested?** | [Evaluation backends](./evaluation-backends.md) | How PenguiFlow runs evaluations locally or with MLflow, what both approaches share, and what each system owns. |
+| **Where should production evidence be stored?** | [Runtime evidence architecture decision](./runtime-evidence-architecture-decision.md) | A comparison of MLflow tracing, OpenTelemetry, external evidence storage, an owned evidence ledger, and dual export. Use this when choosing a deployment approach. |
+| **What research supports this design?** | [Research evidence](./research-evidence.md) | Relevant papers and systems, ideas worth reusing, known weaknesses, and unanswered questions. This is reference material, not required first reading. |
+
+## Key terms in plain language
+
+- **Learning Control Plane:** a service that finds possible improvements, coordinates testing, records approvals, and controls delivery.
+- **Skill:** versioned instructions that may help an agent perform recurring work. A skill cannot add permissions, run code, or force actions.
+- **Runtime evidence:** a record of what an agent did during a real run, including tool use, failures, and its result.
+- **Evaluation:** a controlled test that compares the unchanged agent with the same agent using a candidate skill.
+- **MLflow:** the system that stores evaluation datasets, results, scores, traces, and links between them.
+- **Learning Plane provider:** a framework-specific integration that publishes approved evidence and delivers confirmed skills.
+- **Control plane:** the governance and coordination layer. It runs outside the live customer request path.
+
+## Diagrams
+
+- [Governed agent evolution](./governed-agent-evolution.png) shows the high-level path from production evidence to a tested, approved, and reversible improvement. It appears later in this README.
+- [Governed machine learning loop architecture](./Governed_Machine_Learning_Loop_Architecture.png) shows the systems and people involved in the learning loop. It appears in the [executive brief](./executive-brief.md).
+
 For a run to become learning evidence, two signals are needed:
 
 - **What the agent did** — its trace, tool use, failures, and final result.
