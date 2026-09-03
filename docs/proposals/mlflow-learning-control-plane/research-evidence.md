@@ -115,6 +115,51 @@ position in a sequential workload.
 - Attention dilution and retry lock-in are interpretations rather than directly
   measured mechanisms.
 
+## Towards a Systems Foundation for Agentic Skills
+
+- **Paper:** [Towards a Systems Foundation for Agentic Skills: Architecture, Lifecycle, and Security](https://arxiv.org/abs/2608.29596v1)
+- **Evidence:** Systems synthesis and comparative taxonomy spanning skill
+  architecture, lifecycle, evaluation, and security research.
+
+### Core Idea
+
+Treat a skill as a late-bound procedural package with explicit activation,
+instructions, constraints, tool requirements, execution policy, and intended
+effects. Manage it across discovery, routing, execution, adaptation,
+evaluation, and governance rather than as prompt text alone.
+
+### Skill Model
+
+| Pattern | Possible relevance |
+|---|---|
+| Explicit package manifest | Makes activation, instructions, constraints, required capabilities, execution policy, and intended effects inspectable. |
+| Hybrid representation | Allows prose, schemas, executable resources, and formal contracts to carry different parts of a procedure. |
+| Progressive disclosure | Keeps compact discovery metadata separate from implementation content loaded after selection. |
+| Procedural knowledge boundary | Distinguishes reusable operating guidance from facts, conversation history, and execution evidence. |
+| Managed persistence | Gives stored procedures explicit consolidation, replacement, and retirement paths instead of append-only growth. |
+
+### Runtime Lifecycle
+
+| Pattern | Possible relevance |
+|---|---|
+| State-aware discovery and routing | Selects skills against current goal and execution state rather than exposing an entire catalog. |
+| Capability intersection | Resolves skill tool requirements against permissions available in current execution context. |
+| Explicit composition | Makes ordering, data flow, and shared capability boundaries visible when several skills cooperate. |
+| Local repair | Allows a failed step or graph region to be retried or replaced without restarting all completed work. |
+| Observable execution | Records activation, loaded resources, tool contact, outcomes, and repair paths for later evaluation. |
+| Multidimensional evaluation | Considers correctness, retrieval, composition, cost, usability, and safety together. |
+
+### Trust Lifecycle
+
+| Pattern | Possible relevance |
+|---|---|
+| Admission inspection | Reviews executable resources, natural-language instructions, activation criteria, and declared dependencies before publication. |
+| Versioned provenance | Connects each revision to its source, author, transformation history, and evaluation evidence. |
+| Least-privilege execution | Constrains tools, secrets, filesystem access, network egress, and system calls to current task needs. |
+| Runtime interception | Checks intent and tool arguments at execution boundaries where static inspection has limited context. |
+| Composition checks | Evaluates interactions between individually acceptable skills and their combined capability surface. |
+| Recoverable rollout | Supports staged delivery, observability, revocation, and rollback to a known revision. |
+
 ## Catalog Entry Template
 
 ```text
